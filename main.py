@@ -73,8 +73,7 @@ async def 작물만(ctx):
     await analyze(ctx, only_category="작물")
 
 async def analyze(ctx, exclude_keyword=None, only_category=None):
-    messages = await ctx.channel.history(limit=50).flatten()
-    for msg in messages:
+    async for msg in ctx.channel.history(limit=50):
         if msg.author.bot:
             continue
         if "원가" in msg.content and ("변동후" in msg.content or "현재가" in msg.content):
@@ -94,5 +93,6 @@ async def analyze(ctx, exclude_keyword=None, only_category=None):
                 return
 
     await ctx.send("최근 메시지에서 시세 정보를 찾을 수 없어요.")
+
 
 bot.run(os.getenv("DISCORD_BOT_TOKEN"))
