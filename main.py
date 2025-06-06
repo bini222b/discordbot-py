@@ -60,7 +60,8 @@ async def on_ready():
 async def send_top_items(channel, exclude_keyword=None, only_category=None, limit=5):
     messages = [m async for m in channel.history(limit=50)]
     for msg in messages:
-        if msg.author.bot:
+        # 일반 봇 메시지 제외. 단, 팔로우된 embed 메시지는 허용
+        if msg.webhook_id is None and msg.author.bot:
             continue
 
         content = msg.content
