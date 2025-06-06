@@ -50,6 +50,11 @@ def parse_items(text, exclude_keyword=None, only_category=None):
 @bot.event
 async def on_ready():
     print(f"✅ 봇 작동 중: {bot.user}")
+    try:
+        synced = await bot.tree.sync()
+        print(f"🔁 슬래시 명령어 등록됨: {len(synced)}개")
+    except Exception as e:
+        print(f"❌ 슬래시 명령어 등록 실패: {e}")
     auto_scan.start()
 
 async def send_top_items(channel, exclude_keyword=None, only_category=None, limit=5):
@@ -60,7 +65,10 @@ async def send_top_items(channel, exclude_keyword=None, only_category=None, limi
 
         content = msg.content
         if not content and msg.embeds:
-            content = msg.embeds[0].description or ""
+            embed = msg.embeds[0]
+            content = embed.description or ""
+            if not content and embed.fields:
+                content = "\n".join(f.value for f in embed.fields if f.value)
 
         if "원가" in content and ("변동후" in content or "현재가" in content):
             items = parse_items(content, exclude_keyword, only_category)
@@ -79,41 +87,48 @@ async def send_top_items(channel, exclude_keyword=None, only_category=None, limi
                 return
     await channel.send("최근 메시지에서 시세 정보를 찾을 수 없어요.")
 
-@bot.command()
-async def 작물(ctx):
-    if ctx.channel.name != "작물-시세":
-        await ctx.send("❗ 이 명령어는 #작물-시세 채널에서만 사용할 수 있어요.")
+# 슬래시 명령어 등록
+@bot.tree.command(name="작물", description="작물 시세 수익률 TOP5")
+async def 작물_slash(interaction: discord.Interaction):
+    if interaction.channel.name != "작물-시세":
+        await interaction.response.send_message("❗ 이 명령어는 #작물-시세 채널에서만 사용할 수 있어요.", ephemeral=True)
         return
-    await send_top_items(ctx.channel, only_category="작물")
+    await interaction.response.defer()
+    await send_top_items(interaction.channel, only_category="작물")
 
-@bot.command()
-async def 요리(ctx):
-    if ctx.channel.name != "요리-시세":
-        await ctx.send("❗ 이 명령어는 #요리-시세 채널에서만 사용할 수 있어요.")
+@bot.tree.command(name="요리", description="요리 시세 수익률 TOP5")
+async def 요리_slash(interaction: discord.Interaction):
+    if interaction.channel.name != "요리-시세":
+        await interaction.response.send_message("❗ 이 명령어는 #요리-시세 채널에서만 사용할 수 있어요.", ephemeral=True)
         return
-    await send_top_items(ctx.channel, only_category="요리")
+    await interaction.response.defer()
+    await send_top_items(interaction.channel, only_category="요리")
 
-@bot.command()
-async def 광물(ctx):
-    if ctx.channel.name != "광물-시세":
-        await ctx.send("❗ 이 명령어는 #광물-시세 채널에서만 사용할 수 있어요.")
+@bot.tree.command(name="광물", description="광물 시세 수익률 TOP5")
+async def 광물_slash(interaction: discord.Interaction):
+    if interaction.channel.name != "광물-시세":
+        await interaction.response.send_message("❗ 이 명령어는 #광물-시세 채널에서만 사용할 수 있어요.", ephemeral=True)
         return
-    await send_top_items(ctx.channel, only_category="광물")
+    await interaction.response.defer()
+    await send_top_items(interaction.channel, only_category="광물")
 
-@bot.command()
-async def 물고기(ctx):
-    if ctx.channel.name != "물고기-시세":
-        await ctx.send("❗ 이 명령어는 #물고기-시세 채널에서만 사용할 수 있어요.")
+@bot.tree.command(name="물고기", description="물고기 시세 수익률 TOP5")
+async def 물고기_slash(interaction: discord.Interaction):
+    if interaction.channel.name != "물고기-시세":
+        await interaction.response.send_message("❗ 이 명령어는 #물고기-시세 채널에서만 사용할 수 있어요.", ephemeral=True)
         return
-    await send_top_items(ctx.channel, only_category="물고기")
+    await interaction.response.defer()
+    await send_top_items(interaction.channel, only_category="물고기")
 
-@bot.command()
-async def 황금제외(ctx):
-    await send_top_items(ctx.channel, exclude_keyword="황금")
+@bot.tree.command(name="황금제외", description="'황금' 항목 제외하고 분석")
+async def 황금제외_slash(interaction: discord.Interaction):
+    await interaction.response.defer()
+    await send_top_items(interaction.channel, exclude_keyword="황금")
 
-@bot.command()
-async def top10(ctx):
-    await send_top_items(ctx.channel, limit=10)
+@bot.tree.command(name="top10", description="수익률 TOP10 보기")
+async def top10_slash(interaction: discord.Interaction):
+    await interaction.response.defer()
+    await send_top_items(interaction.channel, limit=10)
 
 @tasks.loop(minutes=2)
 async def auto_scan():
