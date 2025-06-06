@@ -99,9 +99,13 @@ async def 황금제외(ctx):
 
 @tasks.loop(minutes=2)
 async def auto_scan():
-    channel_id = int(os.getenv("DISCORD_CHANNEL_ID"))
-    channel = bot.get_channel(channel_id)
-    if channel:
-        await send_top_items(channel, limit=5)
+    channel_ids = os.getenv("DISCORD_CHANNEL_IDS", "").split(",")
+    for cid in channel_ids:
+        try:
+            channel = bot.get_channel(int(cid.strip()))
+            if channel:
+                await send_top_items(channel, limit=5)
+        except Exception as e:
+            print(f"❌ 채널 오류: {cid}, 에러: {e}")
 
 bot.run(os.getenv("DISCORD_BOT_TOKEN"))
