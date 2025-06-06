@@ -20,7 +20,6 @@ def classify_item(name):
     return "작물"
 
 def parse_items(text, exclude_keyword=None, only_category=None):
-    # 두 가지 패턴 모두 인식: 변동후 / 현재가 기반
     pattern = r"(.+?)\s*\((\d+등급|\d+단계)\):.*?원가:\s*`?([\d,]+)`?.*?(?:변동후|현재가):\s*`?([\d,]+)`?"
     matches = re.findall(pattern, text)
     result = []
@@ -58,8 +57,13 @@ async def send_top_items(channel, exclude_keyword=None, only_category=None, limi
     for msg in messages:
         if msg.author.bot:
             continue
-        if "원가" in msg.content and ("변동후" in msg.content or "현재가" in msg.content):
-            items = parse_items(msg.content, exclude_keyword, only_category)
+
+        content = msg.content
+        if not content and msg.embeds:
+            content = msg.embeds[0].description or ""
+
+        if "원가" in content and ("변동후" in content or "현재가" in content):
+            items = parse_items(content, exclude_keyword, only_category)
             if items:
                 response = f"📊 수익률 TOP {limit}"
                 if only_category:
