@@ -1,6 +1,5 @@
-
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 import os
 import re
 
@@ -21,7 +20,7 @@ def classify_item(name):
     return "작물"
 
 def parse_items(text, exclude_keyword=None, only_category=None):
-    pattern = r"(.+?)\s*\((\d+등급|\d+단계)\):\s*원가:\s*([\d,]+).*?(?:변동후|현재가):\s*([\d,]+)"
+    pattern = r"(.+?)\s*\((\d+등급|\d+단계)\):.*?원가:\s*`?([\d,]+)`?.*?(?:변동후|현재가):\s*`?([\d,]+)`?"
     matches = re.findall(pattern, text)
     result = []
 
@@ -46,53 +45,63 @@ def parse_items(text, exclude_keyword=None, only_category=None):
         except:
             continue
 
-    return sorted(result, key=lambda x: x['profit_rate'], reverse=True)[:5]
+    return sorted(result, key=lambda x: x['profit_rate'], reverse=True)
 
 @bot.event
 async def on_ready():
     print(f"✅ 봇 작동 중: {bot.user}")
+    auto_scan.start()
 
-@bot.command()
-async def 황금제외(ctx):
-    await analyze(ctx, exclude_keyword="황금")
-
-@bot.command()
-async def 요리만(ctx):
-    await analyze(ctx, only_category="요리")
-
-@bot.command()
-async def 광물만(ctx):
-    await analyze(ctx, only_category="광물")
-
-@bot.command()
-async def 물고기만(ctx):
-    await analyze(ctx, only_category="물고기")
-
-@bot.command()
-async def 작물만(ctx):
-    await analyze(ctx, only_category="작물")
-
-async def analyze(ctx, exclude_keyword=None, only_category=None):
-    async for msg in ctx.channel.history(limit=50):
+async def send_top_items(channel, exclude_keyword=None, only_category=None, limit=5):
+    messages = [m async for m in channel.history(limit=50)]
+    for msg in messages:
         if msg.author.bot:
             continue
         if "원가" in msg.content and ("변동후" in msg.content or "현재가" in msg.content):
             items = parse_items(msg.content, exclude_keyword, only_category)
             if items:
-                response = f"📊 수익률 TOP 5"
+                response = f"📊 수익률 TOP {limit}"
                 if only_category:
                     response += f" - {only_category}"
                 if exclude_keyword:
-                    response += f' ("{exclude_keyword}" 제외)'
+                    response += f' (\"{exclude_keyword}\" 제외)'
                 response += "\n"
 
-                for i, item in enumerate(items, start=1):
+                for i, item in enumerate(items[:limit], start=1):
                     response += f"{i}. {item['name']} - {item['profit_rate']:.2f}% (원가: {item['cost']} → 현재가: {item['after']})\n"
 
-                await ctx.send(response)
+                await channel.send(response)
                 return
 
-    await ctx.send("최근 메시지에서 시세 정보를 찾을 수 없어요.")
+@bot.command()
+async def top10(ctx):
+    await send_top_items(ctx.channel, limit=10)
 
+@bot.command()
+async def 요리(ctx):
+    await send_top_items(ctx.channel, only_category="요리")
+
+@bot.command()
+async def 광물(ctx):
+    await send_top_items(ctx.channel, only_category="광물")
+
+@bot.command()
+async def 물고기(ctx):
+    await send_top_items(ctx.channel, only_category="물고기")
+
+@bot.command()
+async def 작물(ctx):
+    await send_top_items(ctx.channel, only_category="작물")
+
+@bot.command()
+async def 황금제외(ctx):
+    await send_top_items(ctx.channel, exclude_keyword="황금")
+
+@tasks.loop(minutes=2)
+async def auto_scan():
+    channel_id = int(os.getenv("DISCORD_CHANNEL_ID"))
+    channel = bot.get_channel(channel_id)
+    if channel:
+        await send_top_items(channel, limit=5)
 
 bot.run(os.getenv("DISCORD_BOT_TOKEN"))
