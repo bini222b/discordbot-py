@@ -20,6 +20,7 @@ def classify_item(name):
     return "작물"
 
 def parse_items(text, exclude_keyword=None, only_category=None):
+    # 두 가지 패턴 모두 인식: 변동후 / 현재가 기반
     pattern = r"(.+?)\s*\((\d+등급|\d+단계)\):.*?원가:\s*`?([\d,]+)`?.*?(?:변동후|현재가):\s*`?([\d,]+)`?"
     matches = re.findall(pattern, text)
     result = []
@@ -64,7 +65,7 @@ async def send_top_items(channel, exclude_keyword=None, only_category=None, limi
                 if only_category:
                     response += f" - {only_category}"
                 if exclude_keyword:
-                    response += f' (\"{exclude_keyword}\" 제외)'
+                    response += f' ("{exclude_keyword}" 제외)'
                 response += "\n"
 
                 for i, item in enumerate(items[:limit], start=1):
