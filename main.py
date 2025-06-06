@@ -72,30 +72,43 @@ async def send_top_items(channel, exclude_keyword=None, only_category=None, limi
 
                 await channel.send(response)
                 return
+    await channel.send("최근 메시지에서 시세 정보를 찾을 수 없어요.")
 
 @bot.command()
-async def top10(ctx):
-    await send_top_items(ctx.channel, limit=10)
+async def 작물(ctx):
+    if ctx.channel.name != "작물-시세":
+        await ctx.send("❗ 이 명령어는 #작물-시세 채널에서만 사용할 수 있어요.")
+        return
+    await send_top_items(ctx.channel, only_category="작물")
 
 @bot.command()
 async def 요리(ctx):
+    if ctx.channel.name != "요리-시세":
+        await ctx.send("❗ 이 명령어는 #요리-시세 채널에서만 사용할 수 있어요.")
+        return
     await send_top_items(ctx.channel, only_category="요리")
 
 @bot.command()
 async def 광물(ctx):
+    if ctx.channel.name != "광물-시세":
+        await ctx.send("❗ 이 명령어는 #광물-시세 채널에서만 사용할 수 있어요.")
+        return
     await send_top_items(ctx.channel, only_category="광물")
 
 @bot.command()
 async def 물고기(ctx):
+    if ctx.channel.name != "물고기-시세":
+        await ctx.send("❗ 이 명령어는 #물고기-시세 채널에서만 사용할 수 있어요.")
+        return
     await send_top_items(ctx.channel, only_category="물고기")
-
-@bot.command()
-async def 작물(ctx):
-    await send_top_items(ctx.channel, only_category="작물")
 
 @bot.command()
 async def 황금제외(ctx):
     await send_top_items(ctx.channel, exclude_keyword="황금")
+
+@bot.command()
+async def top10(ctx):
+    await send_top_items(ctx.channel, limit=10)
 
 @tasks.loop(minutes=2)
 async def auto_scan():
