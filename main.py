@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 import os
 import re
 
@@ -58,7 +58,28 @@ async def on_ready():
         print(f"🔁 슬래시 명령어 등록됨: {len(synced)}개")
     except Exception as e:
         print(f"❌ 슬래시 명령어 등록 실패: {e}")
-    auto_scan.start()
+
+@bot.event
+async def on_message(message):
+    await bot.process_commands(message)
+
+    if message.author.bot:
+        return
+
+    content = message.content
+    if not content and message.embeds:
+        embed = message.embeds[0]
+        content = embed.description or ""
+        if not content and embed.fields:
+            content = "\n".join(f.value for f in embed.fields if f.value)
+
+    if "원가" in content and ("현재가" in content or "변동후" in content):
+        items = parse_items(content)
+        if items:
+            response = "📊 수익률 TOP 5 (자동 감지)\n"
+            for i, item in enumerate(items[:5], start=1):
+                response += f"{i}. {item['name']} - {item['profit_rate']:.2f}% (원가: {item['cost']} → 현재가: {item['after']})\n"
+            await message.channel.send(response)
 
 async def send_top_items(channel, exclude_keyword=None, only_category=None, only_grade=None, limit=5):
     messages = [m async for m in channel.history(limit=50)]
@@ -152,16 +173,5 @@ async def 황금제외_slash(interaction: discord.Interaction):
 async def top10_slash(interaction: discord.Interaction):
     await interaction.response.defer()
     await send_top_items(interaction.channel, limit=10)
-
-@tasks.loop(minutes=2)
-async def auto_scan():
-    channel_ids = os.getenv("DISCORD_CHANNEL_IDS", "").split(",")
-    for cid in channel_ids:
-        try:
-            channel = bot.get_channel(int(cid.strip()))
-            if channel:
-                await send_top_items(channel, limit=5)
-        except Exception as e:
-            print(f"❌ 채널 오류: {cid}, 에러: {e}")
 
 bot.run(os.getenv("DISCORD_BOT_TOKEN"))
