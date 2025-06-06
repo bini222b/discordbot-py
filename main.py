@@ -19,7 +19,7 @@ def classify_item(name):
             return category
     return "작물"
 
-def parse_items(text, exclude_keyword=None, only_category=None):
+def parse_items(text, exclude_keyword=None, only_category=None, only_grade=None):
     pattern = r"(.+?)\s*\((\d+등급|\d+단계)\):.*?원가:\s*`?([\d,]+)`?.*?(?:변동후|현재가):\s*`?([\d,]+)`?"
     matches = re.findall(pattern, text)
     result = []
@@ -31,6 +31,8 @@ def parse_items(text, exclude_keyword=None, only_category=None):
         category = classify_item(full_name)
         if only_category and category != only_category:
             continue
+        if only_grade and only_grade not in grade:
+            continue
         try:
             cost = int(cost_str.replace(",", ""))
             after = int(after_str.replace(",", ""))
@@ -40,7 +42,8 @@ def parse_items(text, exclude_keyword=None, only_category=None):
                 'cost': cost,
                 'after': after,
                 'profit_rate': profit_rate,
-                'category': category
+                'category': category,
+                'grade': grade
             })
         except:
             continue
@@ -57,10 +60,9 @@ async def on_ready():
         print(f"❌ 슬래시 명령어 등록 실패: {e}")
     auto_scan.start()
 
-async def send_top_items(channel, exclude_keyword=None, only_category=None, limit=5):
+async def send_top_items(channel, exclude_keyword=None, only_category=None, only_grade=None, limit=5):
     messages = [m async for m in channel.history(limit=50)]
     for msg in messages:
-        # 일반 봇 메시지 제외. 단, 팔로우된 embed 메시지는 허용
         if msg.webhook_id is None and msg.author.bot:
             continue
 
@@ -72,11 +74,13 @@ async def send_top_items(channel, exclude_keyword=None, only_category=None, limi
                 content = "\n".join(f.value for f in embed.fields if f.value)
 
         if "원가" in content and ("변동후" in content or "현재가" in content):
-            items = parse_items(content, exclude_keyword, only_category)
+            items = parse_items(content, exclude_keyword, only_category, only_grade)
             if items:
                 response = f"📊 수익률 TOP {limit}"
                 if only_category:
                     response += f" - {only_category}"
+                if only_grade:
+                    response += f" ({only_grade} 기준)"
                 if exclude_keyword:
                     response += f' ("{exclude_keyword}" 제외)'
                 response += "\n"
@@ -89,35 +93,53 @@ async def send_top_items(channel, exclude_keyword=None, only_category=None, limi
     await channel.send("최근 메시지에서 시세 정보를 찾을 수 없어요.")
 
 # 슬래시 명령어 등록
+@bot.tree.command(name="1단계", description="1단계 항목 수익률 TOP5")
+async def step1(interaction: discord.Interaction):
+    await interaction.response.defer()
+    await send_top_items(interaction.channel, only_grade="1단계")
+
+@bot.tree.command(name="2단계", description="2단계 항목 수익률 TOP5")
+async def step2(interaction: discord.Interaction):
+    await interaction.response.defer()
+    await send_top_items(interaction.channel, only_grade="2단계")
+
+@bot.tree.command(name="3단계", description="3단계 항목 수익률 TOP5")
+async def step3(interaction: discord.Interaction):
+    await interaction.response.defer()
+    await send_top_items(interaction.channel, only_grade="3단계")
+
+@bot.tree.command(name="1등급", description="1등급 항목 수익률 TOP5")
+async def grade1(interaction: discord.Interaction):
+    await interaction.response.defer()
+    await send_top_items(interaction.channel, only_grade="1등급")
+
+@bot.tree.command(name="2등급", description="2등급 항목 수익률 TOP5")
+async def grade2(interaction: discord.Interaction):
+    await interaction.response.defer()
+    await send_top_items(interaction.channel, only_grade="2등급")
+
+@bot.tree.command(name="3등급", description="3등급 항목 수익률 TOP5")
+async def grade3(interaction: discord.Interaction):
+    await interaction.response.defer()
+    await send_top_items(interaction.channel, only_grade="3등급")
+
 @bot.tree.command(name="작물", description="작물 시세 수익률 TOP5")
 async def 작물_slash(interaction: discord.Interaction):
-    if interaction.channel.name != "작물-시세":
-        await interaction.response.send_message("❗ 이 명령어는 #작물-시세 채널에서만 사용할 수 있어요.", ephemeral=True)
-        return
     await interaction.response.defer()
     await send_top_items(interaction.channel, only_category="작물")
 
 @bot.tree.command(name="요리", description="요리 시세 수익률 TOP5")
 async def 요리_slash(interaction: discord.Interaction):
-    if interaction.channel.name != "요리-시세":
-        await interaction.response.send_message("❗ 이 명령어는 #요리-시세 채널에서만 사용할 수 있어요.", ephemeral=True)
-        return
     await interaction.response.defer()
     await send_top_items(interaction.channel, only_category="요리")
 
 @bot.tree.command(name="광물", description="광물 시세 수익률 TOP5")
 async def 광물_slash(interaction: discord.Interaction):
-    if interaction.channel.name != "광물-시세":
-        await interaction.response.send_message("❗ 이 명령어는 #광물-시세 채널에서만 사용할 수 있어요.", ephemeral=True)
-        return
     await interaction.response.defer()
     await send_top_items(interaction.channel, only_category="광물")
 
 @bot.tree.command(name="물고기", description="물고기 시세 수익률 TOP5")
 async def 물고기_slash(interaction: discord.Interaction):
-    if interaction.channel.name != "물고기-시세":
-        await interaction.response.send_message("❗ 이 명령어는 #물고기-시세 채널에서만 사용할 수 있어요.", ephemeral=True)
-        return
     await interaction.response.defer()
     await send_top_items(interaction.channel, only_category="물고기")
 
