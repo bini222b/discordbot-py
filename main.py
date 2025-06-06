@@ -81,15 +81,17 @@ async def analyze(ctx, exclude_keyword=None, only_category=None):
             items = parse_items(msg.content, exclude_keyword, only_category)
             if items:
                 response = f"📊 수익률 TOP 5"
-            if only_category:
-                response += f" - {only_category}"
-            if exclude_keyword:
-                response += f' ("{exclude_keyword}" 제외)'
-            response += "\\n"
-                for i, item in enumerate(items, start=1):
-                    response += f"{i}. {item['name']} - {item['profit_rate']:.2f}% (원가: {item['cost']} → 현재가: {item['after']})\n"
+                if only_category:
+                    response += f" - {only_category}"
+                if exclude_keyword:
+                    response += f' ("{exclude_keyword}" 제외)'
+                response += "\\n"
+
+                for i, item in enumerate(items, start=1):  # ✅ 여기가 올바른 들여쓰기
+                    response += f"{i}. {item['name']} - {item['profit_rate']:.2f}% (원가: {item['cost']} → 현재가: {item['after']})\\n"
+
                 await ctx.send(response)
                 return
+
     await ctx.send("최근 메시지에서 시세 정보를 찾을 수 없어요.")
 
-bot.run(os.getenv("DISCORD_BOT_TOKEN"))
