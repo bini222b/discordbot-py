@@ -63,7 +63,10 @@ def classify_item(name):
 
 def parse_items(text, exclude_keyword=None, only_category=None, only_grade=None, only_season=None):
     result = []
+    
+    print(f"DEBUG: parse_items 호출됨. only_season: {only_season}. 원본 텍스트 첫 100자:\n{text[:100]}...")
 
+    # 메시지 전처리: 제목 부분 및 불필요한 공백/줄바꿈 제거
     cleaned_text = text
     lines = cleaned_text.split('\n')
     cleaned_lines = []
@@ -79,7 +82,12 @@ def parse_items(text, exclude_keyword=None, only_category=None, only_grade=None,
         else:
             cleaned_lines.append(stripped_line)
     
+    # 디버깅: 전처리된 라인 확인
+    print(f"DEBUG: 전처리 후 cleaned_lines ({len(cleaned_lines)}개): {cleaned_lines[:5]}...")
+
     for line_content in cleaned_lines:
+        # 쉼표로 아이템이 여러 개 이어진 경우를 처리하기 위해 쉼표로 스플릿
+        # 다만, 쉼표가 가격 숫자 안에 포함될 수 있으므로, '아이템명 (X단계):' 패턴을 기준으로 분리
         item_substrings = re.split(r', *(?=[가-힣\s]+?\s*\(\d+등급|\d+단계\))', line_content)
         
         for block in item_substrings:
@@ -87,14 +95,18 @@ def parse_items(text, exclude_keyword=None, only_category=None, only_grade=None,
             if not block:
                 continue
 
-            pattern1 = r"(.+?)\s*\((\d+등급|\d+단계)\):\s*`?원가:\s*([\d,]+)`?,\s*`?변동전:\s*([\d,]+)`?,\s*`?변동후:\s*([\d,]+)`?,\s*`?변동률:.*?"
+            # 1. '변동전', '변동후', '변동률'이 있는 메시지 형식 (변동 알림 메시지)
+            # `원가:`, `변동전:`, `변동후:` 뒤의 숫자가 백틱으로 감싸져 있을 수 있으므로 `\s*`?([\d,]+)`?` 패턴 사용
+            pattern1 = r"(.+?)\s*\((\d+등급|\d+단계)\):\s*`?원가:\s*`?([\d,]+)`?,\s*`?변동전:\s*`?([\d,]+)`?,\s*`?변동후:\s*`?([\d,]+)`?,\s*`?변동률:.*?"
             match = re.search(pattern1, block)
             
             if match:
                 name, grade, cost_str, prev_str, after_str = match.groups()
                 source_type = "변동알림"
             else:
-                pattern2 = r"(.+?)\s*\((\d+등급|\d+단계)\):\s*`?원가:\s*([\d,]+)`?,\s*`?현재가:\s*([\d,]+)`?"
+                # 2. '현재가'만 있는 메시지 형식 (가격 유지/일반 시세 메시지)
+                # `원가:`, `현재가:` 뒤의 숫자가 백틱으로 감싸져 있을 수 있으므로 `\s*`?([\d,]+)`?` 패턴 사용
+                pattern2 = r"(.+?)\s*\((\d+등급|\d+단계)\):\s*`?원가:\s*`?([\d,]+)`?,\s*`?현재가:\s*`?([\d,]+)`?"
                 match = re.search(pattern2, block)
                 if match:
                     name, grade, cost_str, after_str = match.groups()
@@ -107,13 +119,19 @@ def parse_items(text, exclude_keyword=None, only_category=None, only_grade=None,
             base_name_for_lookup = name.strip().replace("특상품 ", "").replace("황금 ", "")
 
             if exclude_keyword and exclude_keyword in full_name:
-                continue
-            category = classify_item(full_name)
-            if only_category and category != only_category:
-                continue
-            if only_grade and only_grade not in grade:
+                # print(f"DEBUG: 제외 키워드 필터링: {full_name}, 키워드: {exclude_keyword}")
                 continue
             
+            category = classify_item(full_name)
+            if only_category and category != only_category:
+                # print(f"DEBUG: 카테고리 불일치: {full_name}, 요청: {only_category}, 실제: {category}")
+                continue
+            
+            if only_grade and only_grade not in grade:
+                # print(f"DEBUG: 등급 불일치: {full_name}, 요청: {only_grade}, 실제: {grade}")
+                continue
+            
+            # 계절 필터링 로직
             if only_season:
                 if category == "작물" and base_name_for_lookup in CROP_DETAILS:
                     item_seasons_str = CROP_DETAILS[base_name_for_lookup].get("계절", "")
@@ -141,11 +159,12 @@ def parse_items(text, exclude_keyword=None, only_category=None, only_grade=None,
                 if category == "작물" and base_name_for_lookup in CROP_DETAILS:
                     item_data.update(CROP_DETAILS[base_name_for_lookup])
                 result.append(item_data)
+                print(f"DEBUG: 아이템 파싱 성공: {full_name} (판매가: {after}, 계절: {item_data.get('계절', 'N/A')})")
             except ValueError:
-                print(f"가격 파싱 오류 ({source_type}): {cost_str} 또는 {after_str} for {block[:50]}...")
+                print(f"가격 변환 오류 ({source_type}): {cost_str} 또는 {after_str} for {block[:50]}...")
                 continue
             except Exception as e:
-                print(f"알 수 없는 파싱 오류: {e} for {block[:50]}...")
+                print(f"알 수 없는 오류 (parse_items): {e} for {block[:50]}...")
                 continue
 
     return sorted(result, key=lambda x: x['after'], reverse=True)
@@ -174,12 +193,12 @@ async def on_message(message):
         for embed in message.embeds:
             if embed.description:
                 extracted_embed_content.append(embed.description)
-                print(f"DEBUG: 임베드 description 내용 추출 ({len(embed.description)}자): {embed.description[:100]}...")
+                # print(f"DEBUG: 임베드 description 내용 추출 ({len(embed.description)}자): {embed.description[:100]}...")
             if embed.fields:
                 for field in embed.fields:
                     if field.value:
                         extracted_embed_content.append(field.value)
-                        print(f"DEBUG: 임베드 field value 내용 추출 ({len(field.value)}자): {field.value[:100]}...")
+                        # print(f"DEBUG: 임베드 field value 내용 추출 ({len(field.value)}자): {field.value[:100]}...")
         content = "\n".join(extracted_embed_content)
         
     if not content.strip():
@@ -218,7 +237,7 @@ async def on_message(message):
 
 async def send_top_items(interaction: discord.Interaction, exclude_keyword=None, only_category=None, only_grade=None, only_season=None, limit=5):
     print(f"DEBUG: send_top_items 호출됨. only_season: {only_season}")
-    messages = [m async for m in interaction.channel.history(limit=50)] # 최근 50개 메시지 조회
+    messages = [m async for m in interaction.channel.history(limit=50)]
     all_filtered_items = []
 
     for msg in messages:
@@ -233,12 +252,12 @@ async def send_top_items(interaction: discord.Interaction, exclude_keyword=None,
             for embed in msg.embeds:
                 if embed.description:
                     extracted_embed_content.append(embed.description)
-                    print(f"DEBUG: (send_top_items) 임베드 description 내용 추출 ({len(embed.description)}자): {embed.description[:100]}...")
+                    # print(f"DEBUG: (send_top_items) 임베드 description 내용 추출 ({len(embed.description)}자): {embed.description[:100]}...")
                 if embed.fields:
                     for field in embed.fields:
                         if field.value:
                             extracted_embed_content.append(field.value)
-                            print(f"DEBUG: (send_top_items) 임베드 field value 내용 추출 ({len(field.value)}자): {field.value[:100]}...")
+                            # print(f"DEBUG: (send_top_items) 임베드 field value 내용 추출 ({len(field.value)}자): {field.value[:100]}...")
             content = "\n".join(extracted_embed_content)
 
         if not content.strip():
@@ -284,13 +303,13 @@ async def send_top_items(interaction: discord.Interaction, exclude_keyword=None,
             response += "\n"
 
         if len(response) > 2000:
-            await interaction.followup.send("결과가 너무 많아 일부만 표시됩니다.") # interaction.channel.send -> interaction.followup.send
-            await interaction.followup.send(response[:1900] + "...") # interaction.channel.send -> interaction.followup.send
+            await interaction.followup.send("결과가 너무 많아 일부만 표시됩니다.")
+            await interaction.followup.send(response[:1900] + "...")
         else:
-            await interaction.followup.send(response) # interaction.channel.send -> interaction.followup.send
+            await interaction.followup.send(response)
     else:
         print(f"DEBUG: (send_top_items) 필터링된 아이템 없음. '찾을 수 없어요' 메시지 전송.")
-        await interaction.followup.send(f"최근 메시지에서 '{only_season}' 계절의 작물 시세 정보를 찾을 수 없어요. (최근 50개 메시지 확인)") # interaction.channel.send -> interaction.followup.send
+        await interaction.followup.send(f"최근 메시지에서 '{only_season}' 계절의 작물 시세 정보를 찾을 수 없어요. (최근 50개 메시지 확인)")
 
 
 @bot.tree.command(name="작물시세", description="특정 계절의 판매가 높은 작물 TOP 5를 조회합니다.")
@@ -303,7 +322,6 @@ async def send_top_items(interaction: discord.Interaction, exclude_keyword=None,
 ])
 async def crop_price_command(interaction: discord.Interaction, season: str):
     await interaction.response.defer()
-    # send_top_items 함수에 interaction 객체를 직접 전달
     await send_top_items(interaction, only_category="작물", only_season=season, limit=5)
 
 try:
