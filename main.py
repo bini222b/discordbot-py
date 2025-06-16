@@ -59,13 +59,45 @@ def classify_item(name):
 def parse_items(text, exclude_keyword=None, only_category=None, only_grade=None, only_season=None):
     result = []
 
-    # 1. '변동전', '변동후', '변동률'이 있는 메시지 형식 (변동 알림 메시지)
-    # 예: 오이 (2단계): 원가: 7,592, 변동전: 8,123, 변동후: 7,999, 변동률: -1.53%
-    pattern1 = r"(.+?)\s*\((\d+등급|\d+단계)\):\s*원가:\s*([\d,]+),\s*변동전:\s*[\d,]+,\s*변동후:\s*([\d,]+),\s*변동률:.*?"
-    matches1 = re.findall(pattern1, text)
+    # 메시지 전처리: 여러 줄, 쉼표 등으로 섞인 아이템을 분리하기 위해
+    # '원가' 또는 '현재가' 또는 '변동후'가 포함된 각 아이템 블록을 찾도록 일반화된 패턴
+    # 첫번째 메시지처럼 앞에 텍스트가 있을 수 있으므로 패턴 시작에 .*? 추가
+    # 아이템 구분이 `,` 로만 이루어져 있기 때문에, 다음 아이템 패턴이 시작하기 전까지를 한 아이템으로 간주
+    # 새로운 아이템이 시작하는 패턴: 아이템이름 (X단계): 원가: ...
+    # 또는 줄바꿈으로도 아이템이 구분될 수 있으므로 (?:,\s*|(?=\n[^\n]*원가:))
+    
+    # 두 가지 주요 패턴을 OR 조건으로 합치기
+    # 1. (아이템명 (등급)): 원가: X, 현재가: Y
+    # 2. (아이템명 (등급)): 원가: X, 변동전: Y, 변동후: Z, 변동률: A%
 
-    for name, grade, cost_str, after_str in matches1:
+    # 각 아이템 정보를 개별적으로 분리하기 위한 패턴
+    # `,\s*(?=[가-힣\s]+\s*\(\d+단계\))` 다음 아이템 시작 패턴을 기준으로 분할
+    # 또는 줄바꿈으로 시작하는 경우도 고려
+    item_blocks = re.split(r',\s*(?=[가-힣\s]+?\s*\(\d+등급|\d+단계\))|\n(?=[가-힣\s]+?\s*\(\d+등급|\d+단계\))', text)
+    
+    for block in item_blocks:
+        block = block.strip() # 공백 제거
+        if not block:
+            continue
+
+        # 1. '변동전', '변동후', '변동률'이 있는 메시지 형식 (변동 알림 메시지)
+        pattern1 = r"(.+?)\s*\((\d+등급|\d+단계)\):\s*원가:\s*([\d,]+),\s*변동전:\s*[\d,]+,\s*변동후:\s*([\d,]+),\s*변동률:.*?"
+        match = re.search(pattern1, block)
+        if match:
+            name, grade, cost_str, after_str = match.groups()
+            source_type = "변동알림"
+        else:
+            # 2. '현재가'만 있는 메시지 형식 (가격 유지/일반 시세 메시지)
+            pattern2 = r"(.+?)\s*\((\d+등급|\d+단계)\):\s*원가:\s*([\d,]+),\s*현재가:\s*([\d,]+)"
+            match = re.search(pattern2, block)
+            if match:
+                name, grade, cost_str, after_str = match.groups() # 현재가를 after_str로 사용
+                source_type = "일반시세"
+            else:
+                continue # 두 패턴 모두 매칭되지 않으면 스킵
+
         full_name = f"{name.strip()} {grade.strip()}"
+        # '특상품' 또는 '황금' 접두사를 제거하여 CROP_DETAILS 키와 매칭
         base_name_for_lookup = name.strip().replace("특상품 ", "").replace("황금 ", "")
 
         if exclude_keyword and exclude_keyword in full_name:
@@ -76,13 +108,16 @@ def parse_items(text, exclude_keyword=None, only_category=None, only_grade=None,
         if only_grade and only_grade not in grade:
             continue
         
-        # 계절 필터링
+        # 계절 필터링 로직
         if only_season:
+            # 분류된 카테고리가 '작물'이고, CROP_DETAILS에 해당 작물이 있어야 계절 필터링 적용
             if category == "작물" and base_name_for_lookup in CROP_DETAILS:
-                item_seasons = CROP_DETAILS[base_name_for_lookup].get("계절", "").split()
+                item_seasons_str = CROP_DETAILS[base_name_for_lookup].get("계절", "")
+                item_seasons = item_seasons_str.split() # "가을 겨울" -> ["가을", "겨울"]
                 if only_season not in item_seasons:
-                    continue
-            else: # 작물인데 CROP_DETAILS에 없거나, 작물이 아니면 계절 필터링에서 제외
+                    continue # 요청된 계절에 해당하지 않으면 스킵
+            else:
+                # 작물이 아니거나 CROP_DETAILS에 없는 작물은 계절 필터링에서 제외
                 continue
 
         try:
@@ -102,56 +137,11 @@ def parse_items(text, exclude_keyword=None, only_category=None, only_grade=None,
                 item_data.update(CROP_DETAILS[base_name_for_lookup])
             result.append(item_data)
         except ValueError:
-            print(f"가격 파싱 오류 (변동 알림): {cost_str} 또는 {after_str}")
-            continue
-
-    # 2. '현재가'만 있는 메시지 형식 (가격 유지/일반 시세 메시지)
-    # 예: 파인애플 (1단계): 원가: 6,322, 현재가: 5,194
-    pattern2 = r"(.+?)\s*\((\d+등급|\d+단계)\):\s*원가:\s*([\d,]+),\s*현재가:\s*([\d,]+)"
-    matches2 = re.findall(pattern2, text)
-
-    for name, grade, cost_str, current_str in matches2:
-        full_name = f"{name.strip()} {grade.strip()}"
-        base_name_for_lookup = name.strip().replace("특상품 ", "").replace("황금 ", "")
-
-        if exclude_keyword and exclude_keyword in full_name:
-            continue
-        category = classify_item(full_name)
-        if only_category and category != only_category:
-            continue
-        if only_grade and only_grade not in grade:
-            continue
-        
-        # 계절 필터링
-        if only_season:
-            if category == "작물" and base_name_for_lookup in CROP_DETAILS:
-                item_seasons = CROP_DETAILS[base_name_for_lookup].get("계절", "").split()
-                if only_season not in item_seasons:
-                    continue
-            else: # 작물인데 CROP_DETAILS에 없거나, 작물이 아니면 계절 필터링에서 제외
-                continue
-
-        try:
-            cost = int(cost_str.replace(",", ""))
-            after = int(current_str.replace(",", "")) # '현재가'를 'after'로 사용
-            profit_rate = ((after - cost) / cost) * 100
-
-            item_data = {
-                'name': full_name,
-                'cost': cost,
-                'after': after,
-                'profit_rate': profit_rate,
-                'category': category,
-                'grade': grade
-            }
-            if category == "작물" and base_name_for_lookup in CROP_DETAILS:
-                item_data.update(CROP_DETAILS[base_name_for_lookup])
-            result.append(item_data)
-        except ValueError:
-            print(f"가격 파싱 오류 (일반 시세): {cost_str} 또는 {current_str}")
+            print(f"가격 파싱 오류 ({source_type}): {cost_str} 또는 {after_str}")
             continue
 
     return sorted(result, key=lambda x: x['after'], reverse=True) # 판매가(after) 높은 순으로 정렬
+
 
 @bot.event
 async def on_ready():
@@ -175,8 +165,12 @@ async def on_message(message):
         content = embed.description or ""
         if not content and embed.fields:
             content = "\n".join(f.value for f in embed.fields if f.value)
+    
+    # 메시지 내용이 비어있으면 처리하지 않음
+    if not content.strip():
+        return
 
-    # on_message 에서는 모든 작물을 감지하므로 only_season 인자를 전달하지 않습니다.
+    # on_message 에서는 자동 감지이므로 계절 필터링 없음
     if "원가" in content and ("현재가" in content or "변동후" in content):
         items = parse_items(content)
         if items:
@@ -206,8 +200,9 @@ async def send_top_items(interaction_channel, exclude_keyword=None, only_categor
 
     for msg in messages:
         # 봇 메시지이지만 웹훅으로 온 메시지(다른 서버 팔로우 메시지)는 포함
-        if msg.webhook_id is None and msg.author.bot and msg.author.id != bot.user.id:
-            continue # 본인 봇 메시지는 제외
+        # 본인 봇 메시지(자동감지 응답 등)는 제외
+        if msg.webhook_id is None and msg.author.bot and msg.author.id == bot.user.id:
+            continue 
 
         content = msg.content
         if not content and msg.embeds:
@@ -215,6 +210,10 @@ async def send_top_items(interaction_channel, exclude_keyword=None, only_categor
             content = embed.description or ""
             if not content and embed.fields:
                 content = "\n".join(f.value for f in embed.fields if f.value)
+        
+        # 메시지 내용이 비어있으면 스킵
+        if not content.strip():
+            continue
 
         if "원가" in content and ("변동후" in content or "현재가" in content):
             # parse_items 호출 시 모든 필터링 인자 전달
@@ -226,7 +225,7 @@ async def send_top_items(interaction_channel, exclude_keyword=None, only_categor
         # 모든 필터링된 아이템을 판매가(after) 기준으로 다시 정렬
         sorted_items = sorted(all_filtered_items, key=lambda x: x['after'], reverse=True)
         
-        response = f"📊 {only_season} 계절 작물 판매가 TOP {limit}" # 응답 제목 변경
+        response = f"📊 {only_season} 계절 작물 판매가 TOP {limit}" if only_season else f"📊 작물 판매가 TOP {limit}" # 응답 제목 변경
         if only_grade:
             response += f" ({only_grade} 기준)"
         if exclude_keyword:
@@ -251,7 +250,12 @@ async def send_top_items(interaction_channel, exclude_keyword=None, only_categor
                     response += f" ({', '.join(details)})"
             response += "\n"
 
-        await interaction_channel.send(response)
+        # 임베드 메시지 사용을 고려해볼 수 있습니다. 현재는 텍스트만 사용
+        if len(response) > 2000: # 디스코드 메시지 길이 제한
+            await interaction_channel.send("결과가 너무 많아 일부만 표시됩니다.")
+            await interaction_channel.send(response[:1900] + "...") # 너무 길면 잘라서 보내기
+        else:
+            await interaction_channel.send(response)
     else:
         await interaction_channel.send(f"최근 메시지에서 '{only_season}' 계절의 작물 시세 정보를 찾을 수 없어요. (최근 50개 메시지 확인)")
 
