@@ -57,72 +57,57 @@ def calculate_profit_rate(cost, price):
 
 # --- Discord 메시지 내용을 파싱하는 함수 수정 ---
 def parse_discord_message_data(message_content):
-    parsed_data = []
-    lines = message_content.split('\n')
-    
-    # 정규식 개선: 줄 시작 부분의 불필요한 텍스트를 허용하도록 수정
-    # 원래: r"^(.*?)\s*\((.*?)\단계\):\s*원가:\s*([\d,]+)(?:,\s*변동전:\s*([\d,]+))?(?:,\s*(?:변동후|현재가):\s*([\d,]+))?(?:,\s*변동률:\s*(-?[\d.]+)%)?$"
-    # 변경: ^ -> .*? 로 변경하고, 마지막 $ 제거하여 앞뒤 여유를 둠
+    parsed = []
+    lines = message_content.splitlines()
     regex = re.compile(
-        r".*?(.*?)\s*\((.*?)\단계\):\s*원가:\s*([\d,]+)" # 이름(단계): 원가:XXX. 앞에 어떤 문자든 허용
-        r"(?:,\s*변동전:\s*([\d,]+))?" # , 변동전:YYY (옵셔널)
-        r"(?:,\s*(?:변동후|현재가):\s*([\d,]+))?" # , 변동후:ZZZ 또는 현재가:WWW (옵셔널)
-        r"(?:,\s*변동률:\s*(-?[\d.]+)%)?" # , 변동률:+-X.X% (옵셔널). 뒤에 어떤 문자든 허용
+        r"^\s*(?P<name>.+?)\s*\((?P<stage>\d+)단계\)\s*:\s*"
+        r"원가\s*:\s*(?P<cost>[\d,]+)"
+        r"(?:\s*,\s*(?:변동후|현재가)\s*:\s*(?P<price>[\d,]+))?"
     )
-
     for line in lines:
-        line = line.strip() # 공백 제거
-        if not line: # 빈 줄 스킵
+        line = line.strip()
+        if not line:
             continue
 
-        match = regex.search(line) # search()는 문자열 내에서 패턴을 찾음. match()는 문자열 시작부터 패턴을 찾음.
-        if match:
-            # 그룹 인덱스는 변하지 않습니다.
-            name = match.group(1).strip() if match.group(1) else None
-            stage = match.group(2).strip() + '단계' if match.group(2) else None
-            cost_str = match.group(3) 
-            price_str = match.group(5) # 그룹 4는 변동전. 그룹 5가 변동후/현재가.
-            profit_rate_str = match.group(6) 
+        m = regex.match(line)
+        if not m:
+            print(f"경고: 형식 불일치 - {line}")
+            continue
 
-            if not (name and stage and cost_str and price_str):
-                print(f"경고: 필수 데이터(이름, 단계, 원가, 판매가) 누락 - {line}")
-                continue 
+        name   = m.group("name").strip()
+        stage  = f'{m.group("stage")}단계'
+        cost_s = m.group("cost")
+        price_s= m.group("price")
 
-            try:
-                cost = int(cost_str.replace(',', ''))
-                price = int(price_str.replace(',', ''))
-                
-                profit_rate = None
-                if profit_rate_str:
-                    profit_rate = float(profit_rate_str)
-                else: 
-                    profit_rate = calculate_profit_rate(cost, price)
+        # fallback: price가 없으면 숫자 마지막 사용
+        if not price_s:
+            nums = re.findall(r"[\d,]+", line)
+            price_s = nums[-1] if len(nums) >= 2 else None
+        if not price_s:
+            print(f"경고: 판매가 추출 실패 - {line}")
+            continue
 
-                is_premium = name.startswith('특상품')
-                is_gold = name.startswith('황금')
+        cost  = int(cost_s.replace(",", ""))
+        price = int(price_s.replace(",", ""))
+        profit = calculate_profit_rate(cost, price)
 
-                base_name = name.replace('특상품 ', '').replace('황금 ', '').strip()
-                
-                parsed_data.append({
-                    "name": name,
-                    "baseName": base_name,
-                    "stage": stage,
-                    "cost": cost,
-                    "price": price,
-                    "profitRate": profit_rate,
-                    "isPremium": is_premium,
-                    "isGold": is_gold
-                })
-            except ValueError as e:
-                print(f"파싱 중 숫자 변환 오류: {line} - {e}")
-                continue 
-            except Exception as e:
-                print(f"알 수 없는 파싱 오류: {line} - {e}")
-                continue
-        else:
-            print(f"경고: 메시지 형식 불일치 (정규식 미매칭) - {line}")
-            
-    return parsed_data
+        is_premium = name.startswith("특상품")
+        is_gold    = name.startswith("황금")
+
+        base_name = name.replace("특상품 ", "").replace("황금 ", "").strip()
+        parsed.append({
+            "name":      name,
+            "baseName":  base_name,
+            "stage":     stage,
+            "cost":      cost,
+            "price":     price,
+            "profitRate": profit,
+            "isPremium":  is_premium,
+            "isGold":     is_gold
+        })
+
+    return parsed
+
 
 # Discord 메시지 길이 제한(2000자)을 고려하여 메시지를 분할하는 헬퍼 함수
 def _split_message(message_parts, max_len=1900):
