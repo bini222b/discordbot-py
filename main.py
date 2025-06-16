@@ -1,14 +1,10 @@
 import discord
 import os
-import re # 정규식 파싱을 위해 추가
+import re
 
 # --- 환경 변수에서 설정 로드 ---
-# Discord 봇 토큰 (필수)
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-# 메시지를 읽어와 계산할 Discord 채널 ID (숫자, 필수)
-# 이 채널에 사용자가 특정 형식의 메시지를 보내면 봇이 이를 처리합니다.
 SOURCE_CHANNEL_ID = int(os.getenv("SOURCE_CHANNEL_ID"))
-# 봇의 계산된 결과를 보낼 Discord 채널 ID (숫자, 필수)
 RESULT_CHANNEL_ID = int(os.getenv("RESULT_CHANNEL_ID"))
 
 # 필수 환경 변수 확인
@@ -20,14 +16,11 @@ if not RESULT_CHANNEL_ID:
     raise ValueError("RESULT_CHANNEL_ID 환경 변수가 설정되지 않았습니다. 봇이 결과를 보낼 채널 ID를 설정하세요.")
 
 # --- Discord 봇 설정 ---
-# 봇 인텐트 설정 (메시지 내용을 읽기 위해 MESSAGE_CONTENT 활성화)
 intents = discord.Intents.default()
-intents.message_content = True # 메시지 내용을 읽기 위해 활성화
+intents.message_content = True
 bot = discord.Client(intents=intents)
 
 # --- 웹 페이지의 `fixedCropDetails`를 Python 딕셔너리로 변환 ---
-# 이 데이터는 HTML 파일의 JavaScript 부분에서 복사해 온 것입니다.
-# 'basePrice'는 메시지에서 '원가'를 파싱하여 동적으로 사용됩니다.
 fixed_crop_details = {
     "마늘": {"mastery": "-", "season": "여름 가을"},
     "홉": {"mastery": "-", "season": "봄 겨울"},
@@ -62,47 +55,68 @@ def calculate_profit_rate(cost, price):
         return None # 계산 불가
     return ((price - cost) / cost) * 100
 
-# --- 웹 페이지의 `parseCropPriceData` 로직을 Python으로 변환 (Discord 메시지 형식에 맞춰) ---
+# --- Discord 메시지 내용을 파싱하는 함수 수정 ---
 def parse_discord_message_data(message_content):
     parsed_data = []
     lines = message_content.split('\n')
-    # 웹 페이지에서 사용된 정규식과 유사하게 Discord 메시지 파싱
-    # 예시: "오이 (2단계): 원가: 7,592, 변동전: 8,123, 변동후: 7,999, 변동률: -1.53%"
-    # 또는 "특상품 파인애플 (3단계): 원가: 9,845, 현재가: 10,160"
-    regex = r"(.*?)\s*\((.*?)\단계\):\s*(?:원가:\s*([\d,]+),\s*)?(?:변동전:\s*[\d,]+,\s*)?(?:변동후:\s*([\d,]+),\s*)?(?:현재가:\s*([\d,]+))?,?\s*(?:변동률:\s*(-?[\d.]+)%)?"
     
+    # 2가지 메시지 형식 모두를 처리할 수 있도록 정규식 조정
+    # 형식 1: 이름 (단계): 원가: XXX, 변동전: YYY, 변동후: ZZZ, 변동률: +-W.W%
+    # 형식 2: 이름 (단계): 원가: XXX, 현재가: YYY
+    # regex = r"^(.*?)\s*\((.*?)\단계\):\s*원가:\s*([\d,]+),\s*(?:변동전:\s*[\d,]+,\s*)?(?:변동후:\s*([\d,]+)|현재가:\s*([\d,]+))?(?:,\s*변동률:\s*(-?[\d.]+)%)?$"
+    
+    # 정규식 개선: 변동전, 변동후, 현재가, 변동률 모두 옵셔널하게 처리
+    # 그룹 1: 작물 이름 (ex: 키위, 특상품 양배추, 황금 마늘)
+    # 그룹 2: 단계 (ex: 1, 2)
+    # 그룹 3: 원가 (ex: 8,378)
+    # 그룹 4: 변동전 (옵셔널)
+    # 그룹 5: 변동후 또는 현재가 (둘 중 하나가 있을 수 있음)
+    # 그룹 6: 변동률 (옵셔널)
+    regex = re.compile(
+        r"^(.*?)\s*\((.*?)\단계\):\s*원가:\s*([\d,]+)" # 이름(단계): 원가:XXX
+        r"(?:,\s*변동전:\s*([\d,]+))?" # , 변동전:YYY (옵셔널)
+        r"(?:,\s*(?:변동후|현재가):\s*([\d,]+))?" # , 변동후:ZZZ 또는 현재가:WWW (옵셔널)
+        r"(?:,\s*변동률:\s*(-?[\d.]+)%)?$" # , 변동률:+-X.X% (옵셔널)
+    )
+
     for line in lines:
-        match = re.search(regex, line)
+        line = line.strip() # 공백 제거
+        if not line: # 빈 줄 스킵
+            continue
+
+        match = regex.search(line)
         if match:
             name = match.group(1).strip() if match.group(1) else None
             stage = match.group(2).strip() + '단계' if match.group(2) else None
-            cost_str = match.group(3) # 원가
-            price_after_str = match.group(4) # 변동후
-            current_price_str = match.group(5) # 현재가
-            profit_rate_str = match.group(6) # 변동률 (웹페이지에서 수익률과 혼용)
+            cost_str = match.group(3) # 원가 (필수)
+            # 변동전은 사용하지 않으므로 무시: match.group(4)
+            price_str = match.group(5) # 변동후 또는 현재가
+            profit_rate_str = match.group(6) # 변동률
 
-            cost = int(cost_str.replace(',', '')) if cost_str else None
-            # 판매가는 '변동후' 또는 '현재가' 중 하나를 사용
-            price = int(price_after_str.replace(',', '')) if price_after_str else \
-                    (int(current_price_str.replace(',', '')) if current_price_str else None)
-            
-            profit_rate = float(profit_rate_str) if profit_rate_str else None
+            if not (name and stage and cost_str and price_str):
+                print(f"경고: 필수 데이터 누락 - {line}")
+                continue # 필수 데이터가 없으면 스킵
 
-            # 이름에서 '특상품' 또는 '황금' 접두사 확인
-            is_premium = name.startswith('특상품') if name else False
-            is_gold = name.startswith('황금') if name else False
+            try:
+                cost = int(cost_str.replace(',', ''))
+                price = int(price_str.replace(',', ''))
+                
+                profit_rate = None
+                if profit_rate_str:
+                    profit_rate = float(profit_rate_str)
+                else: # 메시지에 변동률이 없으면 직접 계산
+                    profit_rate = calculate_profit_rate(cost, price)
 
-            if name and stage and cost is not None and price is not None:
+                # 이름에서 '특상품' 또는 '황금' 접두사 확인
+                is_premium = name.startswith('특상품')
+                is_gold = name.startswith('황금')
+
                 # 원본 이름에서 '특상품' 또는 '황금' 접두사를 제거하여 고정 데이터와 매칭
                 base_name = name.replace('특상품 ', '').replace('황금 ', '').strip()
                 
-                # 수익률이 메시지에 포함되어 있지 않거나 계산이 필요한 경우 다시 계산
-                if profit_rate is None:
-                    profit_rate = calculate_profit_rate(cost, price)
-
                 parsed_data.append({
                     "name": name,
-                    "baseName": base_name, # 원본 이름에서 특상품/황금 제외한 이름
+                    "baseName": base_name,
                     "stage": stage,
                     "cost": cost,
                     "price": price,
@@ -110,6 +124,15 @@ def parse_discord_message_data(message_content):
                     "isPremium": is_premium,
                     "isGold": is_gold
                 })
+            except ValueError as e:
+                print(f"파싱 중 숫자 변환 오류: {line} - {e}")
+                continue # 숫자 변환 오류 발생 시 해당 줄 스킵
+            except Exception as e:
+                print(f"알 수 없는 파싱 오류: {line} - {e}")
+                continue
+        else:
+            print(f"경고: 메시지 형식 불일치 - {line}") # 정규식에 매칭되지 않는 줄
+            
     return parsed_data
 
 # Discord 메시지 길이 제한(2000자)을 고려하여 메시지를 분할하는 헬퍼 함수
@@ -145,18 +168,19 @@ async def on_message(message):
 
     # 봇이 메시지를 읽어와 계산할 특정 채널에서 온 메시지만 처리
     if message.channel.id == SOURCE_CHANNEL_ID:
-        # '!계산' 또는 '!calc'와 같은 명령어로 시작하는 메시지만 처리하도록 할 수 있습니다.
-        # if not message.content.lower().startswith('!계산'):
-        #    return
+        # 특정 명령어로 시작하는 메시지만 처리하려면 주석 해제 (예: !시세 또는 !계산)
+        # if not message.content.lower().startswith('!시세'):
+        #     return
 
-        print(f"SOURCE_CHANNEL_ID({message.channel.name})에서 메시지 수신: {message.content[:50]}...") # 메시지 일부 출력
+        print(f"SOURCE_CHANNEL_ID({message.channel.name})에서 메시지 수신: {message.content[:100]}...") # 메시지 일부 출력
 
         try:
             # 메시지 내용을 파싱하여 작물 데이터 추출
             all_crop_data = parse_discord_message_data(message.content)
 
             if not all_crop_data:
-                await message.channel.send("🚧 메시지에서 유효한 작물 시세 데이터를 찾을 수 없습니다. 형식을 확인해 주세요.")
+                await message.channel.send("🚧 메시지에서 유효한 작물 시세 데이터를 찾을 수 없습니다. 형식을 확인해 주세요.",
+                                           reference=message.to_reference()) # 원본 메시지에 답장
                 return
 
             processed_results = []
@@ -166,8 +190,6 @@ async def on_message(message):
                 
                 # profitRate가 메시지에서 직접 파싱되었거나, 아니면 여기서 다시 계산
                 profit_rate = item["profitRate"]
-                if profit_rate is None:
-                    profit_rate = calculate_profit_rate(item["cost"], item["price"])
                 
                 processed_results.append({
                     "name": item["name"],
@@ -186,7 +208,11 @@ async def on_message(message):
             processed_results.sort(key=lambda x: x["profitRate"] if x["profitRate"] is not None else -float('inf'), reverse=True)
             
             # Discord 메시지 생성 (상위 N개만 표시)
-            message_parts = ["**📈 작물 시세 분석 결과 📉**", "---"]
+            message_parts = [
+                "**📈 작물 시세 분석 결과 📉**", 
+                f"*(원본 메시지: {message.jump_url})*", # 원본 메시지 링크 추가
+                "---"
+            ]
 
             if processed_results:
                 # 상위 10개 작물만 전송 (개수는 조정 가능)
@@ -214,8 +240,9 @@ async def on_message(message):
                 print(f"오류: 결과 채널 ID({RESULT_CHANNEL_ID})를 찾을 수 없습니다. 메시지를 보낼 수 없습니다.")
 
         except Exception as e:
-            print(f"메시지 처리 중 오류 발생: {e}")
-            await message.channel.send(f"⚠️ **메시지 처리 중 오류가 발생했습니다:** {e}")
+            print(f"메시지 처리 중 알 수 없는 오류 발생: {e}")
+            await message.channel.send(f"⚠️ **메시지 처리 중 오류가 발생했습니다:** {e}",
+                                       reference=message.to_reference()) # 원본 메시지에 답장
 
 # 봇 실행
 if __name__ == "__main__":
