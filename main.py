@@ -63,7 +63,6 @@ def calculate_profit_rate(cost, price):
 def parse_discord_message_data(message_content):
     parsed_data = []
     lines = message_content.splitlines()
-    # 변동전(prev), 변동후 또는 현재가(price) 그룹 포함
     regex = re.compile(
         r"^\s*(?P<name>.+?)\s*\((?P<stage>\d+)단계\)\s*:\s*"
         r"원가\s*:\s*(?P<cost>[\d,]+)"
@@ -72,7 +71,6 @@ def parse_discord_message_data(message_content):
     )
 
     for raw in lines:
-        # 마크다운 기호 제거
         line = raw.strip()
         line = re.sub(r"^[-*]\s*", "", line)
         line = line.replace("`", "")
@@ -81,28 +79,21 @@ def parse_discord_message_data(message_content):
 
         m = regex.match(line)
         if not m:
-            print(f"경고: 형식 불일치 - {line}")
-            continue
+            continue  # 형식 불일치 건너뜀
 
         name    = m.group("name").strip()
         stage   = f"{m.group('stage')}단계"
         cost_s  = m.group("cost")
-        price_s = m.group("price")
-
-        # 1) 변동후/현재가  2) 변동전(prev)  3) '변동률' 이전 텍스트에서 마지막 숫자
-        if not price_s:
-            price_s = m.group("prev")
+        price_s = m.group("price") or m.group("prev")
         if not price_s:
             no_pct   = line.split("변동률")[0]
             nums     = re.findall(r"[\d,]+", no_pct)
-            # 원가, 변동전, 변동후 순서이므로 3개 이상일 때 마지막이 변동후
             price_s  = nums[2] if len(nums) >= 3 else None
         if not price_s:
-            print(f"경고: 판매가 추출 실패 - {line}")
             continue
 
-        cost   = int(cost_s.replace(",", ""))
-        price  = int(price_s.replace(",", ""))
+        cost  = int(cost_s.replace(",", ""))
+        price = int(price_s.replace(",", ""))
         profit = calculate_profit_rate(cost, price)
 
         is_premium = name.startswith("특상품")
@@ -145,47 +136,45 @@ async def on_ready():
 
 @bot.event
 async def on_message(message):
-    # 봇 자신의 메시지나 다른 채널은 무시
     if message.author == bot.user or message.channel.id != SOURCE_CHANNEL_ID:
         return
 
     content = message.content.strip()
-    if not content:
-        # 텍스트가 없으면 무시
+    # 커맨드 포맷: /작물시세 계절\n<시세텍스트>
+    if not content.startswith("/작물시세"):
         return
 
-    # 파싱
-    all_crop_data = parse_discord_message_data(content)
-    if not all_crop_data:
-        await message.channel.send(
-            "🚧 메시지에서 유효한 작물 시세 데이터를 찾을 수 없습니다. 형식을 확인해주세요.",
-            reference=message.to_reference()
-        )
+    parts = content.splitlines()
+    cmd = parts[0]
+    args = cmd.split(maxsplit=1)
+    if len(args) < 2:
+        await message.channel.send("❗ 사용법: /작물시세 <계절>\n예) /작물시세 봄", reference=message.to_reference())
+        return
+    season_filter = args[1].strip()
+    data_text = "\n".join(parts[1:])
+
+    all_crop_data = parse_discord_message_data(data_text)
+    # 특상품·황금 제외 및 계절 필터
+    filtered = [
+        c for c in all_crop_data
+        if not c["isPremium"] and not c["isGold"]
+        and fixed_crop_details.get(c["baseName"], {}).get("season", "").split()
+        and season_filter in fixed_crop_details[c["baseName"]]["season"].split()
+    ]
+    if not filtered:
+        await message.channel.send(f"❗ '{season_filter}' 계절에 해당하는 작물이 없습니다.", reference=message.to_reference())
         return
 
-    # 숙련도/계절 정보 추가 및 정렬
-    processed = []
-    for item in all_crop_data:
-        details = fixed_crop_details.get(item["baseName"], {"mastery": "-", "season": "-"})
-        processed.append({
-            **item,
-            "mastery": details["mastery"],
-            "season":  details["season"]
-        })
-    processed.sort(
-        key=lambda x: x["profitRate"] if x["profitRate"] is not None else -float('inf'),
-        reverse=True
-    )
+    # 판매가 기준 내림차순 정렬
+    filtered.sort(key=lambda x: x["price"], reverse=True)
 
-    # 메시지 생성 및 전송
-    message_parts = ["**📈 작물 시세 분석 결과 📉**", "---"]
-    for i, crop in enumerate(processed[:10]):
-        premium_tag = " ✨(특상품)" if crop["isPremium"] else ""
-        gold_tag    = " 🌟(황금)" if crop["isGold"]    else ""
-        profit_disp = f"{crop['profitRate']:.2f}%" if crop['profitRate'] is not None else "계산 불가"
+    # 메시지 작성
+    message_parts = [f"**📈 {season_filter} 계절 작물 시세 (판매가 기준 내림차순)**", "---"]
+    for c in filtered:
+        d = fixed_crop_details.get(c["baseName"], {"mastery": "-", "season": "-"})
         message_parts.append(
-            f"{i+1}. **{crop['name']}** (단계: {crop['stage']}, 원가: {crop['cost']:,}원, 판매가: {crop['price']:,}원)"
-            f"{premium_tag}{gold_tag} - **수익률: {profit_disp}** (숙련도: {crop['mastery']}, 계절: {crop['season']})"
+            f"**{c['name']}** (단계: {c['stage']}, 원가: {c['cost']:,}원, 판매가: {c['price']:,}원) - "
+            f"수익률: {c['profitRate']:.2f}% (숙련도: {d['mastery']}, 계절: {d['season']})"
         )
 
     result_ch = bot.get_channel(RESULT_CHANNEL_ID)
