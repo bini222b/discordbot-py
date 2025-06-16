@@ -59,41 +59,50 @@ def classify_item(name):
 def parse_items(text, exclude_keyword=None, only_category=None, only_grade=None, only_season=None):
     result = []
 
-    # 메시지 전처리: 여러 줄, 쉼표 등으로 섞인 아이템을 분리하기 위해
-    # '원가' 또는 '현재가' 또는 '변동후'가 포함된 각 아이템 블록을 찾도록 일반화된 패턴
-    # 첫번째 메시지처럼 앞에 텍스트가 있을 수 있으므로 패턴 시작에 .*? 추가
-    # 아이템 구분이 `,` 로만 이루어져 있기 때문에, 다음 아이템 패턴이 시작하기 전까지를 한 아이템으로 간주
-    # 새로운 아이템이 시작하는 패턴: 아이템이름 (X단계): 원가: ...
-    # 또는 줄바꿈으로도 아이템이 구분될 수 있으므로 (?:,\s*|(?=\n[^\n]*원가:))
+    # 메시지 전처리: 제목 부분 및 불필요한 공백/줄바꿈 제거
+    # "가격 상승된 아이템:" 또는 "가격 하락된 아이템:" 이후의 내용만 추출
+    cleaned_text = text
+    if "가격 상승된 아이템:" in text:
+        cleaned_text = cleaned_text.split("가격 상승된 아이템:", 1)[1]
+    if "가격 하락된 아이템:" in cleaned_text:
+        cleaned_text = cleaned_text.split("가격 하락된 아이템:", 1)[0] # 하락된 아이템 섹션은 분리하여 처리
     
-    # 두 가지 주요 패턴을 OR 조건으로 합치기
-    # 1. (아이템명 (등급)): 원가: X, 현재가: Y
-    # 2. (아이템명 (등급)): 원가: X, 변동전: Y, 변동후: Z, 변동률: A%
+    # 각 아이템 블록을 분리하기 위한 정규 표현식 (줄바꿈 또는 ,로 구분)
+    # 쉼표 다음에 새로운 아이템 이름과 (등급) 패턴이 시작하는 지점
+    # 또는 줄바꿈 다음에 새로운 아이템 이름과 (등급) 패턴이 시작하는 지점
+    item_blocks = re.split(r',\s*(?=[가-힣\s]+?\s*\(\d+등급|\d+단계\):)|(?<=\n)[^\n]*?(?=[가-힣\s]+?\s*\(\d+등급|\d+단계\):)', cleaned_text)
 
-    # 각 아이템 정보를 개별적으로 분리하기 위한 패턴
-    # `,\s*(?=[가-힣\s]+\s*\(\d+단계\))` 다음 아이템 시작 패턴을 기준으로 분할
-    # 또는 줄바꿈으로 시작하는 경우도 고려
-    item_blocks = re.split(r',\s*(?=[가-힣\s]+?\s*\(\d+등급|\d+단계\))|\n(?=[가-힣\s]+?\s*\(\d+등급|\d+단계\))', text)
-    
+    # 쉼표로 분리된 마지막 아이템 블록에 잔여 데이터가 있을 수 있으므로 한번 더 분할
+    # 메시지 끝에 불필요한 쉼표가 있을 수 있으므로 trim
+    item_blocks = [block.strip() for block in item_blocks if block.strip()]
+
+    # 특수하게 메시지 중간에 "가격 유지된 아이템:" 같은 섹션 헤더가 있으면 제거
+    # 이 헤더는 아이템 정보가 아니므로 파싱에서 제외
+    item_blocks = [block for block in item_blocks if "가격 유지된 아이템:" not in block and "가격 상승된 아이템:" not in block and "가격 하락된 아이템:" not in block]
+
     for block in item_blocks:
-        block = block.strip() # 공백 제거
+        block = block.strip() # 다시 한번 공백 제거
         if not block:
             continue
-
+        
         # 1. '변동전', '변동후', '변동률'이 있는 메시지 형식 (변동 알림 메시지)
-        pattern1 = r"(.+?)\s*\((\d+등급|\d+단계)\):\s*원가:\s*([\d,]+),\s*변동전:\s*[\d,]+,\s*변동후:\s*([\d,]+),\s*변동률:.*?"
+        # `원가:`, `변동전:`, `변동후:` 뒤에 `[\d,]+`를 사용하여 쉼표 있는 숫자 파싱
+        pattern1 = r"(.+?)\s*\((\d+등급|\d+단계)\):\s*`?원가:\s*([\d,]+)`?,\s*`?변동전:\s*[\d,]+`?,\s*`?변동후:\s*([\d,]+)`?,\s*`?변동률:.*?"
         match = re.search(pattern1, block)
+        
         if match:
             name, grade, cost_str, after_str = match.groups()
             source_type = "변동알림"
         else:
             # 2. '현재가'만 있는 메시지 형식 (가격 유지/일반 시세 메시지)
-            pattern2 = r"(.+?)\s*\((\d+등급|\d+단계)\):\s*원가:\s*([\d,]+),\s*현재가:\s*([\d,]+)"
+            # `원가:`, `현재가:` 뒤에 `[\d,]+`를 사용하여 쉼표 있는 숫자 파싱
+            pattern2 = r"(.+?)\s*\((\d+등급|\d+단계)\):\s*`?원가:\s*([\d,]+)`?,\s*`?현재가:\s*([\d,]+)`?"
             match = re.search(pattern2, block)
             if match:
                 name, grade, cost_str, after_str = match.groups() # 현재가를 after_str로 사용
                 source_type = "일반시세"
             else:
+                # print(f"DEBUG: 파싱 실패 블록: {block[:100]}...") # 디버깅용
                 continue # 두 패턴 모두 매칭되지 않으면 스킵
 
         full_name = f"{name.strip()} {grade.strip()}"
@@ -115,9 +124,11 @@ def parse_items(text, exclude_keyword=None, only_category=None, only_grade=None,
                 item_seasons_str = CROP_DETAILS[base_name_for_lookup].get("계절", "")
                 item_seasons = item_seasons_str.split() # "가을 겨울" -> ["가을", "겨울"]
                 if only_season not in item_seasons:
+                    # print(f"DEBUG: 계절 불일치: {full_name} (필요: {only_season}, 실제: {item_seasons_str})") # 디버깅용
                     continue # 요청된 계절에 해당하지 않으면 스킵
             else:
                 # 작물이 아니거나 CROP_DETAILS에 없는 작물은 계절 필터링에서 제외
+                # print(f"DEBUG: 작물 아님/DETAILS 없음: {full_name} (카테고리: {category})") # 디버깅용
                 continue
 
         try:
@@ -137,7 +148,10 @@ def parse_items(text, exclude_keyword=None, only_category=None, only_grade=None,
                 item_data.update(CROP_DETAILS[base_name_for_lookup])
             result.append(item_data)
         except ValueError:
-            print(f"가격 파싱 오류 ({source_type}): {cost_str} 또는 {after_str}")
+            print(f"가격 파싱 오류 ({source_type}): {cost_str} 또는 {after_str} for {block[:50]}...")
+            continue
+        except Exception as e:
+            print(f"알 수 없는 파싱 오류: {e} for {block[:50]}...")
             continue
 
     return sorted(result, key=lambda x: x['after'], reverse=True) # 판매가(after) 높은 순으로 정렬
@@ -156,8 +170,17 @@ async def on_ready():
 async def on_message(message):
     await bot.process_commands(message)
 
-    if message.author.bot:
+    if message.author.id == bot.user.id: # 봇 자신의 메시지 (자동 감지 응답 등)는 무시
         return
+    
+    # 일반 봇 메시지이지만 웹훅이 아닌 경우 스킵 (웹훅 메시지는 bot.author.bot = True)
+    # 웹훅 메시지는 webhook_id가 None이 아님 (주로) 또는 is_webhook() 메소드 사용
+    # 여기서는 msg.webhook_id is None 대신, msg.author.bot만 보고 웹훅 메시지는 걸러내지 않고 진행
+    # (다른 서버 팔로우 메시지는 봇으로 인식되지만 webhook_id가 있을 수 있음)
+    # 현재 코드에서는 msg.webhook_id is None and msg.author.bot을 제외 조건으로 썼는데,
+    # 웹훅 메시지는 msg.author.bot은 True이지만 msg.webhook_id가 None이 아니므로 걸러지지 않음.
+    # 즉, 봇 메시지 중 '본인 봇' 메시지만 제외하는 것이 더 정확.
+    # 따라서 이 조건은 삭제하고 아래 on_message의 첫번째 줄만 유지
 
     content = message.content
     if not content and message.embeds:
@@ -168,12 +191,15 @@ async def on_message(message):
     
     # 메시지 내용이 비어있으면 처리하지 않음
     if not content.strip():
+        # print("DEBUG: 빈 메시지 또는 내용 없는 임베드 스킵.") # 디버깅용
         return
 
     # on_message 에서는 자동 감지이므로 계절 필터링 없음
     if "원가" in content and ("현재가" in content or "변동후" in content):
+        # print("DEBUG: 자동 감지 시작 - '원가' 키워드 감지.") # 디버깅용
         items = parse_items(content)
         if items:
+            # print(f"DEBUG: 자동 감지에서 {len(items)}개 아이템 파싱 성공.") # 디버깅용
             response = "📊 수익률 TOP 5 (자동 감지)\n"
             for i, item in enumerate(items[:5], start=1):
                 response += f"{i}. {item['name']} - {item['profit_rate']:.2f}% (원가: {item['cost']} → 현재가: {item['after']})"
@@ -191,17 +217,21 @@ async def on_message(message):
                     if details:
                         response += f" ({', '.join(details)})"
                 response += "\n"
+            # print("DEBUG: 자동 감지 응답 전송.") # 디버깅용
             await message.channel.send(response)
+        # else:
+            # print("DEBUG: 자동 감지 - 파싱된 아이템 없음.") # 디버깅용
 
 # send_top_items 함수: 모든 메시지를 대상으로 필터링된 아이템을 모아서 정렬
 async def send_top_items(interaction_channel, exclude_keyword=None, only_category=None, only_grade=None, only_season=None, limit=5):
+    # print(f"DEBUG: send_top_items 호출됨. only_season: {only_season}") # 디버깅용
     messages = [m async for m in interaction_channel.history(limit=50)] # 최근 50개 메시지 조회
     all_filtered_items = [] # 모든 메시지에서 필터링된 아이템을 저장할 리스트
 
     for msg in messages:
-        # 봇 메시지이지만 웹훅으로 온 메시지(다른 서버 팔로우 메시지)는 포함
         # 본인 봇 메시지(자동감지 응답 등)는 제외
-        if msg.webhook_id is None and msg.author.bot and msg.author.id == bot.user.id:
+        if msg.author.id == bot.user.id:
+            # print(f"DEBUG: 본인 봇 메시지 스킵: {msg.content[:50]}...") # 디버깅용
             continue 
 
         content = msg.content
@@ -213,15 +243,24 @@ async def send_top_items(interaction_channel, exclude_keyword=None, only_categor
         
         # 메시지 내용이 비어있으면 스킵
         if not content.strip():
+            # print("DEBUG: 빈 메시지 스킵.") # 디버깅용
             continue
 
         if "원가" in content and ("변동후" in content or "현재가" in content):
+            # print(f"DEBUG: send_top_items - 시세 키워드 감지됨. 메시지 길이: {len(content)}") # 디버깅용
+            # print(f"DEBUG: 메시지 내용 첫 200자:\n{content[:200]}") # 디버깅용
             # parse_items 호출 시 모든 필터링 인자 전달
             items = parse_items(content, exclude_keyword, only_category, only_grade, only_season)
             if items:
+                # print(f"DEBUG: send_top_items - {len(items)}개 아이템 파싱 성공. (season: {only_season})") # 디버깅용
                 all_filtered_items.extend(items)
+            # else:
+                # print(f"DEBUG: send_top_items - 파싱된 아이템 없음. (season: {only_season})") # 디버깅용
+        # else:
+            # print("DEBUG: send_top_items - 시세 키워드 불일치.") # 디버깅용
     
     if all_filtered_items:
+        # print(f"DEBUG: 총 {len(all_filtered_items)}개 필터링된 아이템 발견.") # 디버깅용
         # 모든 필터링된 아이템을 판매가(after) 기준으로 다시 정렬
         sorted_items = sorted(all_filtered_items, key=lambda x: x['after'], reverse=True)
         
@@ -250,7 +289,6 @@ async def send_top_items(interaction_channel, exclude_keyword=None, only_categor
                     response += f" ({', '.join(details)})"
             response += "\n"
 
-        # 임베드 메시지 사용을 고려해볼 수 있습니다. 현재는 텍스트만 사용
         if len(response) > 2000: # 디스코드 메시지 길이 제한
             await interaction_channel.send("결과가 너무 많아 일부만 표시됩니다.")
             await interaction_channel.send(response[:1900] + "...") # 너무 길면 잘라서 보내기
