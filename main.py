@@ -50,77 +50,63 @@ CROP_DETAILS = {
     "코코넛": {"수확량": "1개", "재배 단계": "5단계", "계절": "여름 가을", "숙련도": 40},
 }
 
-# 접두어 제거 및 작물명 정리 함수
+# 접두어 제거 함수
+
 def clean_base_name(name: str) -> str:
-    # '특상품', '황금' 등의 접두어 제거
     return re.sub(r'^(특상품|황금)\s*', '', name).strip()
 
 # 카테고리 분류 함수
+
 def classify_item(name: str) -> str:
     base = clean_base_name(name)
     for category, keywords in CATEGORY_KEYWORDS.items():
-        if any(keyword in name for keyword in keywords):
+        if any(k in name for k in keywords):
             return category
     if base in CROP_DETAILS:
         return "작물"
     return "기타"
 
 # 아이템 파싱 함수
+
 def parse_items(text: str, exclude_keyword=None, only_category=None, only_grade=None, only_season=None):
     result = []
-    print(f"DEBUG: parse_items 호출됨. only_season: {only_season}. 원본 텍스트 첫 100자:\n{text[:100]}...")
+    print(f"DEBUG: parse_items 호출됨. only_season: {only_season}.")
 
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
         s = line.strip()
-        if not s or s.startswith(('## ', '### ', '가격 상승된 아이템:', '가격 하락된 아이템:', '가격 유지된 아이템:')):
+        if not s or s.startswith(('##', '###', '가격 상승된 아이템', '가격 하락된 아이템', '가격 유지된 아이템')):
             continue
-        if s.startswith('- '):
-            cleaned_lines.append(s[2:].strip())
-        else:
-            cleaned_lines.append(s)
-
-    print(f"DEBUG: 전처리 후 cleaned_lines ({len(cleaned_lines)}개): {cleaned_lines[:5]}...")
+        cleaned_lines.append(s[2:].strip() if s.startswith('- ') else s)
 
     for line in cleaned_lines:
-        parts = re.split(r', *(?=[가-힣\s]+?\s*\(\d+(?:등급|단계)\))', line)
+        parts = re.split(r', *(?=[가-힣]+?\s*\(\d+(?:등급|단계)\))', line)
         for block in parts:
             block = block.strip()
             if not block:
                 continue
-            # 변동 알림 형식
-            m = re.search(r"(.+?)\s*\((\d+(?:등급|단계))\):\s*`?원가:\s*`?([\d,]+)`?,\s*`?변동전:\s*`?([\d,]+)`?,\s*`?변동후:\s*`?([\d,]+)`?,", block)
-            if m:
-                name, grade, cost_str, prev_str, after_str = m.groups()
-            else:
-                # 일반 시세 형식
-                m2 = re.search(r"(.+?)\s*\((\d+(?:등급|단계))\):\s*`?원가:\s*`?([\d,]+)`?,\s*`?현재가:\s*`?([\d,]+)`?", block)
-                if not m2:
-                    print(f"DEBUG: 파싱 실패 블록: {block[:50]}...")
-                    continue
-                name, grade, cost_str, after_str = m2.groups()
+            m = re.search(r"(.+?)\s*\((\d+(?:등급|단계))\):.*?원가:`?([\d,]+)`?.*?(?:변동후|현재가):`?([\d,]+)`?", block)
+            if not m:
+                print(f"DEBUG: 파싱 실패 블록: {block}")
+                continue
+            name, grade, cost_str, after_str = m.groups()
 
             full_name = f"{name.strip()} {grade.strip()}"
             base = clean_base_name(name)
+            category = classify_item(full_name)
 
-            # 필터링
             if exclude_keyword and exclude_keyword in full_name:
                 continue
-            category = classify_item(full_name)
             if only_category and category != only_category:
                 continue
             if only_grade and only_grade not in grade:
                 continue
 
             # 계절 필터링
-            if only_season:
-                if category == "작물" and base in CROP_DETAILS:
-                    seasons = CROP_DETAILS[base]["계절"].split()
-                    if only_season not in seasons:
-                        print(f"DEBUG: 계절 불일치: {full_name} (요청:{only_season}, 실제:{CROP_DETAILS[base]['계절']})")
-                        continue
-                else:
+            if only_season and category == "작물" and base in CROP_DETAILS:
+                seasons = CROP_DETAILS[base]["계절"].split()
+                if only_season not in seasons:
                     continue
 
             try:
@@ -128,25 +114,14 @@ def parse_items(text: str, exclude_keyword=None, only_category=None, only_grade=
                 after = int(after_str.replace(',', ''))
                 profit_rate = (after - cost) / cost * 100
             except ValueError:
-                print(f"가격 변환 오류: {cost_str} 또는 {after_str} in {block}")
                 continue
 
-            item = {
-                'name': full_name,
-                'cost': cost,
-                'after': after,
-                'profit_rate': profit_rate,
-                'category': category,
-                'grade': grade
-            }
-            if category == "작물" and base in CROP_DETAILS:
-                item.update(CROP_DETAILS[base])
-
+            item = { 'name': full_name, 'cost': cost, 'after': after, 'profit_rate': profit_rate, 'category': category, 'grade': grade }
+            if category == "작물":
+                item.update(CROP_DETAILS.get(base, {}))
             result.append(item)
-            print(f"DEBUG: 아이템 파싱 성공: {full_name}")
 
     return sorted(result, key=lambda x: x['after'], reverse=True)
-
 # 이하 on_ready, on_message, send_top_items, 슬래시 명령 등은 동일하게 유지
 
 @bot.event
