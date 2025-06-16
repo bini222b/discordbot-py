@@ -4,6 +4,8 @@ import os
 import re
 from discord import app_commands
 
+print("DEBUG: 봇 스크립트 시작 지점!")
+
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="/", intents=intents)
@@ -155,6 +157,7 @@ def parse_items(text, exclude_keyword=None, only_category=None, only_grade=None,
 
 @bot.event
 async def on_ready():
+    print(f"DEBUG: on_ready 이벤트 실행됨! 봇 유저: {bot.user}")
     print(f"✅ 봇 작동 중: {bot.user}")
     try:
         await bot.tree.sync()
@@ -255,6 +258,11 @@ async def send_top_items(interaction_channel, exclude_keyword=None, only_categor
     else:
         await interaction_channel.send(f"최근 메시지에서 '{only_season}' 계절의 작물 시세 정보를 찾을 수 없어요. (최근 50개 메시지 확인)")
 
+try:
+    print("DEBUG: bot.run() 호출 시도 중...") # << 여기에 추가
+    bot.run(token) # token 변수를 직접 사용
+except Exception as e:
+    print(f"CRITICAL ERROR: 봇 실행 중 치명적인 오류 발생: {e}") # << 여기에 추가
 
 @bot.tree.command(name="작물시세", description="특정 계절의 판매가 높은 작물 TOP 5를 조회합니다.")
 @app_commands.describe(season="조회할 계절을 선택하세요.")
