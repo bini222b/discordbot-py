@@ -79,7 +79,7 @@ def parse_discord_message_data(message_content):
 
         m = regex.match(line)
         if not m:
-            continue  # 형식 불일치 건너뜀
+            continue
 
         name    = m.group("name").strip()
         stage   = f"{m.group('stage')}단계"
@@ -140,7 +140,7 @@ async def on_message(message):
         return
 
     content = message.content.strip()
-    # 커맨드 포맷: /작물시세 계절\n<시세텍스트>
+    # 커맨드 포맷: /작물시세 <계절>\n<시세텍스트>
     if not content.startswith("/작물시세"):
         return
 
@@ -158,22 +158,22 @@ async def on_message(message):
     filtered = [
         c for c in all_crop_data
         if not c["isPremium"] and not c["isGold"]
-        and fixed_crop_details.get(c["baseName"], {}).get("season", "").split()
-        and season_filter in fixed_crop_details[c["baseName"]]["season"].split()
+        and season_filter in fixed_crop_details.get(c["baseName"], {}).get("season", "").split()
     ]
     if not filtered:
         await message.channel.send(f"❗ '{season_filter}' 계절에 해당하는 작물이 없습니다.", reference=message.to_reference())
         return
 
-    # 판매가 기준 내림차순 정렬
+    # 판매가 기준 내림차순 정렬 및 TOP10
     filtered.sort(key=lambda x: x["price"], reverse=True)
+    top10 = filtered[:10]
 
     # 메시지 작성
-    message_parts = [f"**📈 {season_filter} 계절 작물 시세 (판매가 기준 내림차순)**", "---"]
-    for c in filtered:
+    message_parts = [f"**🏪 무역상점1 {season_filter} 계절 TOP10 작물 시세 (판매가 순)**", "---"]
+    for idx, c in enumerate(top10, 1):
         d = fixed_crop_details.get(c["baseName"], {"mastery": "-", "season": "-"})
         message_parts.append(
-            f"**{c['name']}** (단계: {c['stage']}, 원가: {c['cost']:,}원, 판매가: {c['price']:,}원) - "
+            f"{idx}. **{c['name']}** (단계: {c['stage']}, 원가: {c['cost']:,}원, 판매가: {c['price']:,}원) - "
             f"수익률: {c['profitRate']:.2f}% (숙련도: {d['mastery']}, 계절: {d['season']})"
         )
 
