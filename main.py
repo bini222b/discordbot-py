@@ -60,23 +60,14 @@ def parse_discord_message_data(message_content):
     parsed_data = []
     lines = message_content.split('\n')
     
-    # 2가지 메시지 형식 모두를 처리할 수 있도록 정규식 조정
-    # 형식 1: 이름 (단계): 원가: XXX, 변동전: YYY, 변동후: ZZZ, 변동률: +-W.W%
-    # 형식 2: 이름 (단계): 원가: XXX, 현재가: YYY
-    # regex = r"^(.*?)\s*\((.*?)\단계\):\s*원가:\s*([\d,]+),\s*(?:변동전:\s*[\d,]+,\s*)?(?:변동후:\s*([\d,]+)|현재가:\s*([\d,]+))?(?:,\s*변동률:\s*(-?[\d.]+)%)?$"
-    
-    # 정규식 개선: 변동전, 변동후, 현재가, 변동률 모두 옵셔널하게 처리
-    # 그룹 1: 작물 이름 (ex: 키위, 특상품 양배추, 황금 마늘)
-    # 그룹 2: 단계 (ex: 1, 2)
-    # 그룹 3: 원가 (ex: 8,378)
-    # 그룹 4: 변동전 (옵셔널)
-    # 그룹 5: 변동후 또는 현재가 (둘 중 하나가 있을 수 있음)
-    # 그룹 6: 변동률 (옵셔널)
+    # 정규식 개선: 줄 시작 부분의 불필요한 텍스트를 허용하도록 수정
+    # 원래: r"^(.*?)\s*\((.*?)\단계\):\s*원가:\s*([\d,]+)(?:,\s*변동전:\s*([\d,]+))?(?:,\s*(?:변동후|현재가):\s*([\d,]+))?(?:,\s*변동률:\s*(-?[\d.]+)%)?$"
+    # 변경: ^ -> .*? 로 변경하고, 마지막 $ 제거하여 앞뒤 여유를 둠
     regex = re.compile(
-        r"^(.*?)\s*\((.*?)\단계\):\s*원가:\s*([\d,]+)" # 이름(단계): 원가:XXX
+        r".*?(.*?)\s*\((.*?)\단계\):\s*원가:\s*([\d,]+)" # 이름(단계): 원가:XXX. 앞에 어떤 문자든 허용
         r"(?:,\s*변동전:\s*([\d,]+))?" # , 변동전:YYY (옵셔널)
         r"(?:,\s*(?:변동후|현재가):\s*([\d,]+))?" # , 변동후:ZZZ 또는 현재가:WWW (옵셔널)
-        r"(?:,\s*변동률:\s*(-?[\d.]+)%)?$" # , 변동률:+-X.X% (옵셔널)
+        r"(?:,\s*변동률:\s*(-?[\d.]+)%)?" # , 변동률:+-X.X% (옵셔널). 뒤에 어떤 문자든 허용
     )
 
     for line in lines:
@@ -84,18 +75,18 @@ def parse_discord_message_data(message_content):
         if not line: # 빈 줄 스킵
             continue
 
-        match = regex.search(line)
+        match = regex.search(line) # search()는 문자열 내에서 패턴을 찾음. match()는 문자열 시작부터 패턴을 찾음.
         if match:
+            # 그룹 인덱스는 변하지 않습니다.
             name = match.group(1).strip() if match.group(1) else None
             stage = match.group(2).strip() + '단계' if match.group(2) else None
-            cost_str = match.group(3) # 원가 (필수)
-            # 변동전은 사용하지 않으므로 무시: match.group(4)
-            price_str = match.group(5) # 변동후 또는 현재가
-            profit_rate_str = match.group(6) # 변동률
+            cost_str = match.group(3) 
+            price_str = match.group(5) # 그룹 4는 변동전. 그룹 5가 변동후/현재가.
+            profit_rate_str = match.group(6) 
 
             if not (name and stage and cost_str and price_str):
-                print(f"경고: 필수 데이터 누락 - {line}")
-                continue # 필수 데이터가 없으면 스킵
+                print(f"경고: 필수 데이터(이름, 단계, 원가, 판매가) 누락 - {line}")
+                continue 
 
             try:
                 cost = int(cost_str.replace(',', ''))
@@ -104,14 +95,12 @@ def parse_discord_message_data(message_content):
                 profit_rate = None
                 if profit_rate_str:
                     profit_rate = float(profit_rate_str)
-                else: # 메시지에 변동률이 없으면 직접 계산
+                else: 
                     profit_rate = calculate_profit_rate(cost, price)
 
-                # 이름에서 '특상품' 또는 '황금' 접두사 확인
                 is_premium = name.startswith('특상품')
                 is_gold = name.startswith('황금')
 
-                # 원본 이름에서 '특상품' 또는 '황금' 접두사를 제거하여 고정 데이터와 매칭
                 base_name = name.replace('특상품 ', '').replace('황금 ', '').strip()
                 
                 parsed_data.append({
@@ -126,12 +115,12 @@ def parse_discord_message_data(message_content):
                 })
             except ValueError as e:
                 print(f"파싱 중 숫자 변환 오류: {line} - {e}")
-                continue # 숫자 변환 오류 발생 시 해당 줄 스킵
+                continue 
             except Exception as e:
                 print(f"알 수 없는 파싱 오류: {line} - {e}")
                 continue
         else:
-            print(f"경고: 메시지 형식 불일치 - {line}") # 정규식에 매칭되지 않는 줄
+            print(f"경고: 메시지 형식 불일치 (정규식 미매칭) - {line}")
             
     return parsed_data
 
