@@ -10,6 +10,14 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="/", intents=intents)
 
+# 토큰을 직접 os.getenv에서 가져와 변수에 할당 (이전과 동일하게 유지)
+discord_bot_token = os.getenv("DISCORD_BOT_TOKEN") # 변수명을 token 대신 discord_bot_token으로 변경하여 혼동 방지
+if discord_bot_token:
+    print("DEBUG: 봇 토큰 환경 변수 감지됨.")
+else:
+    print("ERROR: 봇 토큰 환경 변수를 찾을 수 없습니다! 'DISCORD_BOT_TOKEN' 확인 필요.")
+    # 토큰이 없으면 봇 실행을 중단하는 것이 좋지만, 일단은 에러 메시지만 출력
+
 CATEGORY_KEYWORDS = {
     "요리": ["요리", "토르타", "타코", "또르띠아", "부리토", "나쵸", "케사디야", "토르티야", "피클", "스튜", "수프", "볶음", "카레", "샌드위치"],
     "광물": ["원석", "블록", "광석", "수정", "다이아몬드", "에메랄드", "금", "은", "철"],
@@ -58,31 +66,21 @@ def classify_item(name):
 def parse_items(text, exclude_keyword=None, only_category=None, only_grade=None, only_season=None):
     result = []
 
-    # 메시지 전처리: 여러 줄로 나뉜 아이템을 각 줄별로 분리
-    # 먼저 헤더 부분을 제거
     cleaned_text = text
-    # "## **" 나 "### **"로 시작하는 줄을 제거 (제목, 소제목 등)
     lines = cleaned_text.split('\n')
     cleaned_lines = []
     for line in lines:
         stripped_line = line.strip()
-        if not stripped_line: # 빈 줄 스킵
+        if not stripped_line:
             continue
         if stripped_line.startswith(('## ', '### ', '가격 상승된 아이템:', '가격 하락된 아이템:', '가격 유지된 아이템:')):
-            continue # 헤더 줄 스킵
-        if stripped_line.startswith('- '): # `- `로 시작하는 줄에서 `- ` 제거
+            continue
+        if stripped_line.startswith('- '):
             cleaned_lines.append(stripped_line[2:].strip())
-        else: # 그 외의 줄은 그대로 추가 (이전에는 ,로 구분되던 것들)
+        else:
             cleaned_lines.append(stripped_line)
     
-    # 이제 cleaned_lines는 '아이템 (등급): 원가: X, 현재가: Y' 또는 '아이템 (등급): 원가: X, 변동전: Y, 변동후: Z, 변동률: A%' 형태의 문자열 리스트
-    # 각 줄을 다시 쉼표로 분리하여 개별 아이템 파싱 시도
-    
-    # 줄 단위로 파싱하고, 각 줄 안에서 쉼표로 구분된 아이템을 처리
     for line_content in cleaned_lines:
-        # 쉼표로 아이템이 여러 개 이어진 경우를 처리하기 위해 쉼표로 스플릿
-        # 다만, 쉼표가 가격 숫자 안에 포함될 수 있으므로, '아이템명 (X단계):' 패턴을 기준으로 분리
-        # '아이템명 (X단계)' 패턴: [가-힣\s]+?\s*\(\d+등급|\d+단계\)
         item_substrings = re.split(r', *(?=[가-힣\s]+?\s*\(\d+등급|\d+단계\))', line_content)
         
         for block in item_substrings:
@@ -90,23 +88,20 @@ def parse_items(text, exclude_keyword=None, only_category=None, only_grade=None,
             if not block:
                 continue
 
-            # 1. '변동전', '변동후', '변동률'이 있는 메시지 형식 (변동 알림 메시지)
             pattern1 = r"(.+?)\s*\((\d+등급|\d+단계)\):\s*`?원가:\s*([\d,]+)`?,\s*`?변동전:\s*([\d,]+)`?,\s*`?변동후:\s*([\d,]+)`?,\s*`?변동률:.*?"
             match = re.search(pattern1, block)
             
             if match:
-                name, grade, cost_str, prev_str, after_str = match.groups() # 변동전도 따로 받도록 변경
+                name, grade, cost_str, prev_str, after_str = match.groups()
                 source_type = "변동알림"
             else:
-                # 2. '현재가'만 있는 메시지 형식 (가격 유지/일반 시세 메시지)
                 pattern2 = r"(.+?)\s*\((\d+등급|\d+단계)\):\s*`?원가:\s*([\d,]+)`?,\s*`?현재가:\s*([\d,]+)`?"
                 match = re.search(pattern2, block)
                 if match:
                     name, grade, cost_str, after_str = match.groups()
                     source_type = "일반시세"
                 else:
-                    # print(f"DEBUG: 파싱 실패 블록: {block[:100]}...")
-                    continue # 두 패턴 모두 매칭되지 않으면 스킵
+                    continue
 
             full_name = f"{name.strip()} {grade.strip()}"
             base_name_for_lookup = name.strip().replace("특상품 ", "").replace("황금 ", "")
@@ -119,7 +114,6 @@ def parse_items(text, exclude_keyword=None, only_category=None, only_grade=None,
             if only_grade and only_grade not in grade:
                 continue
             
-            # 계절 필터링 로직
             if only_season:
                 if category == "작물" and base_name_for_lookup in CROP_DETAILS:
                     item_seasons_str = CROP_DETAILS[base_name_for_lookup].get("계절", "")
@@ -127,7 +121,7 @@ def parse_items(text, exclude_keyword=None, only_category=None, only_grade=None,
                     if only_season not in item_seasons:
                         continue
                 else:
-                    continue # 작물이 아니거나 CROP_DETAILS에 없는 작물은 계절 필터링에서 제외
+                    continue
 
             try:
                 cost = int(cost_str.replace(",", ""))
@@ -152,13 +146,12 @@ def parse_items(text, exclude_keyword=None, only_category=None, only_grade=None,
                 print(f"알 수 없는 파싱 오류: {e} for {block[:50]}...")
                 continue
 
-    return sorted(result, key=lambda x: x['after'], reverse=True) # 판매가(after) 높은 순으로 정렬
+    return sorted(result, key=lambda x: x['after'], reverse=True)
 
 
 @bot.event
 async def on_ready():
     print(f"DEBUG: on_ready 이벤트 실행됨! 봇 유저: {bot.user}")
-    print(f"✅ 봇 작동 중: {bot.user}")
     try:
         await bot.tree.sync()
         print(f"✅ 슬래시 명령어가 성공적으로 동기화되었습니다.")
@@ -204,7 +197,7 @@ async def on_message(message):
             await message.channel.send(response)
 
 async def send_top_items(interaction_channel, exclude_keyword=None, only_category=None, only_grade=None, only_season=None, limit=5):
-    messages = [m async for m in interaction_channel.history(limit=50)] # 최근 50개 메시지 조회
+    messages = [m async for m in interaction_channel.history(limit=50)]
     all_filtered_items = []
 
     for msg in messages:
@@ -258,11 +251,6 @@ async def send_top_items(interaction_channel, exclude_keyword=None, only_categor
     else:
         await interaction_channel.send(f"최근 메시지에서 '{only_season}' 계절의 작물 시세 정보를 찾을 수 없어요. (최근 50개 메시지 확인)")
 
-try:
-    print("DEBUG: bot.run() 호출 시도 중...") # << 여기에 추가
-    bot.run(token) # token 변수를 직접 사용
-except Exception as e:
-    print(f"CRITICAL ERROR: 봇 실행 중 치명적인 오류 발생: {e}") # << 여기에 추가
 
 @bot.tree.command(name="작물시세", description="특정 계절의 판매가 높은 작물 TOP 5를 조회합니다.")
 @app_commands.describe(season="조회할 계절을 선택하세요.")
@@ -276,4 +264,10 @@ async def crop_price_command(interaction: discord.Interaction, season: str):
     await interaction.response.defer()
     await send_top_items(interaction.channel, only_category="작물", only_season=season, limit=5)
 
-bot.run(os.getenv("DISCORD_BOT_TOKEN"))
+# 봇 실행 부분 (가장 마지막)
+try:
+    print("DEBUG: bot.run() 호출 시도 중...")
+    # 토큰 변수명을 discord_bot_token으로 변경했으므로, 이 변수를 사용
+    bot.run(discord_bot_token) 
+except Exception as e:
+    print(f"CRITICAL ERROR: 봇 실행 중 치명적인 오류 발생: {e}")
