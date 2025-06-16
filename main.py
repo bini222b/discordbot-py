@@ -50,88 +50,75 @@ CROP_DETAILS = {
     "코코넛": {"수확량": "1개", "재배 단계": "5단계", "계절": "여름 가을", "숙련도": 40},
 }
 
-# 접두어 제거 함수
-
+# 접두어 제거
 def clean_base_name(name: str) -> str:
     return re.sub(r'^(특상품|황금)\s*', '', name).strip()
 
-# 카테고리 분류 함수
-
+# 아이템 분류
 def classify_item(name: str) -> str:
     base = clean_base_name(name)
-    for category, keywords in CATEGORY_KEYWORDS.items():
+    for cat, keywords in CATEGORY_KEYWORDS.items():
         if any(k in name for k in keywords):
-            return category
+            return cat
     if base in CROP_DETAILS:
         return "작물"
     return "기타"
 
 # 아이템 파싱 함수
-
 def parse_items(text: str, exclude_keyword=None, only_category=None, only_grade=None, only_season=None):
-    result = []
-    print(f"DEBUG: parse_items 호출됨. only_season: {only_season}.")
+    items = []
+    print(f"DEBUG: parse_items 호출 (only_season={only_season})")
 
-    lines = text.split('\n')
-    cleaned_lines = []
+    # 불필요 라인 제거
+    lines = [l.strip().lstrip('- ').strip() for l in text.splitlines()
+             if l.strip() and not l.strip().startswith(('##','가격'))]
+
+    # 블록 분리 및 정규식 매칭
+    pattern = re.compile(
+        r"(?P<name>.+?)\s*\((?P<grade>\d+(?:등급|단계))\):`?원가:(?P<cost>[\d,]+)`?,`?(?:변동전:(?P<before>[\d,]+)`?,)?`?(?:변동후|현재가):(?P<after>[\d,]+)`?,?\s*`?변동률:(?P<rate>[+-]?\d+\.?\d*)%?`")
     for line in lines:
-        s = line.strip()
-        if not s or s.startswith(('##', '###', '가격 상승된 아이템', '가격 하락된 아이템', '가격 유지된 아이템')):
-            continue
-        cleaned_lines.append(s[2:].strip() if s.startswith('- ') else s)
-
-    for line in cleaned_lines:
-        parts = re.split(r', *(?=[가-힣]+?\s*\(\d+(?:등급|단계)\))', line)
-        for block in parts:
-            block = block.strip()
-            if not block:
-                continue
-            m = re.search(r"(.+?)\s*\((\d+(?:등급|단계))\):.*?원가:`?([\d,]+)`?.*?(?:변동후|현재가):`?([\d,]+)`?", block)
+        for block in re.split(r', (?=[^,]+\(\d+)', line):
+            m = pattern.search(block)
             if not m:
                 print(f"DEBUG: 파싱 실패 블록: {block}")
                 continue
-            name, grade, cost_str, after_str = m.groups()
-
-            full_name = f"{name.strip()} {grade.strip()}"
-            base = clean_base_name(name)
+            d = m.groupdict()
+            full_name = f"{d['name'].strip()} {d['grade']}"
+            base = clean_base_name(d['name'])
             category = classify_item(full_name)
 
-            if exclude_keyword and exclude_keyword in full_name:
-                continue
-            if only_category and category != only_category:
-                continue
-            if only_grade and only_grade not in grade:
-                continue
+            # 필터링
+            if exclude_keyword and exclude_keyword in full_name: continue
+            if only_category and category != only_category: continue
+            if only_grade and only_grade not in d['grade']: continue
+            if only_season and category == '작물' and base in CROP_DETAILS:
+                seasons = CROP_DETAILS[base]['계절'].split()
+                if only_season not in seasons: continue
 
-            # 계절 필터링
-            if only_season and category == "작물" and base in CROP_DETAILS:
-                seasons = CROP_DETAILS[base]["계절"].split()
-                if only_season not in seasons:
-                    continue
+            # 숫자 변환 및 이익률 계산
+            cost = int(d['cost'].replace(',',''))
+            after = int(d['after'].replace(',',''))
+            rate = float(d['rate'])
 
-            try:
-                cost = int(cost_str.replace(',', ''))
-                after = int(after_str.replace(',', ''))
-                profit_rate = (after - cost) / cost * 100
-            except ValueError:
-                continue
-
-            item = { 'name': full_name, 'cost': cost, 'after': after, 'profit_rate': profit_rate, 'category': category, 'grade': grade }
-            if category == "작물":
+            item = {
+                'name': full_name,
+                'cost': cost,
+                'after': after,
+                'profit_rate': rate,
+                'category': category,
+                'grade': d['grade']
+            }
+            if category == '작물':
                 item.update(CROP_DETAILS.get(base, {}))
-            result.append(item)
+            items.append(item)
 
-    return sorted(result, key=lambda x: x['after'], reverse=True)
-# 이하 on_ready, on_message, send_top_items, 슬래시 명령 등은 동일하게 유지
+    return sorted(items, key=lambda x: x['after'], reverse=True)
 
+# 봇 이벤트 핸들러
 @bot.event
 async def on_ready():
-    print(f"DEBUG: on_ready 이벤트 실행됨! 봇 유저: {bot.user}")
-    try:
-        await bot.tree.sync()
-        print("✅ 슬래시 명령어가 성공적으로 동기화되었습니다.")
-    except Exception as e:
-        print(f"❌ 슬래시 명령어 동기화 실패: {e}")
+    print(f"DEBUG: on_ready - {bot.user}")
+    await bot.tree.sync()
 
 @bot.event
 async def on_message(message):
@@ -140,68 +127,44 @@ async def on_message(message):
         return
     content = message.content or ''
     if message.embeds and not content.strip():
-        extracted = []
-        for embed in message.embeds:
-            if embed.description:
-                extracted.append(embed.description)
-            if embed.fields:
-                for f in embed.fields:
-                    if f.value:
-                        extracted.append(f.value)
-        content = '\n'.join(extracted)
-    if not content.strip():
-        return
-    if "원가" in content and ("현재가" in content or "변동후" in content):
-        items = parse_items(content)
-        if items:
-            response = "📊 수익률 TOP 5 (자동 감지)\n"
-            for i, it in enumerate(items[:5], start=1):
-                response += f"{i}. {it['name']} - {it['profit_rate']:.2f}% (원가: {it['cost']}→현재가: {it['after']})\n"
-            await message.channel.send(response)
+        content = '\n'.join(e.description or '' for e in message.embeds)
+    if '원가' in content and ('현재가' in content or '변동후' in content):
+        parsed = parse_items(content)
+        if parsed:
+            resp = '📊 수익률 TOP 5\n'
+            for i, it in enumerate(parsed[:5], 1):
+                resp += f"{i}. {it['name']} - {it['profit_rate']:.2f}% (원가:{it['cost']}→판매가:{it['after']})\n"
+            await message.channel.send(resp)
 
-@bot.tree.command(name="작물시세", description="특정 계절의 판매가 높은 작물 TOP 5를 조회합니다.")
-@app_commands.describe(season="조회할 계절을 선택하세요.")
+# 슬래시 커맨드: 계절별 작물 시세
+@app_commands.command(name='작물시세', description='계절별 TOP 작물 조회')
 @app_commands.choices(season=[
-    app_commands.Choice(name="봄", value="봄"),
-    app_commands.Choice(name="여름", value="여름"),
-    app_commands.Choice(name="가을", value="가을"),
-    app_commands.Choice(name="겨울", value="겨울"),
+    app_commands.Choice(name='봄', value='봄'),
+    app_commands.Choice(name='여름', value='여름'),
+    app_commands.Choice(name='가을', value='가을'),
+    app_commands.Choice(name='겨울', value='겨울')
 ])
-async def crop_price_command(interaction: discord.Interaction, season: str):
+async def crop_price(interaction: discord.Interaction, season: str):
     await interaction.response.defer()
-    await send_top_items(interaction, only_category="작물", only_season=season, limit=5)
-
-async def send_top_items(interaction, exclude_keyword=None, only_category=None, only_grade=None, only_season=None, limit=5):
-    messages = [m async for m in interaction.channel.history(limit=50)]
+    msgs = [m async for m in interaction.channel.history(limit=50)]
     all_items = []
-    for msg in messages:
-        if msg.author.id == bot.user.id:
-            continue
-        content = msg.content or ''
-        if msg.embeds and not content.strip():
-            extracted = []
-            for embed in msg.embeds:
-                if embed.description:
-                    extracted.append(embed.description)
-                if embed.fields:
-                    for f in embed.fields:
-                        if f.value:
-                            extracted.append(f.value)
-            content = '\n'.join(extracted)
-        if not content.strip():
-            continue
-        if "원가" in content and ("변동후" in content or "현재가" in content):
-            items = parse_items(content, exclude_keyword, only_category, only_grade, only_season)
-            if items:
-                all_items.extend(items)
+    for m in msgs:
+        if m.author.id == bot.user.id: continue
+        text = m.content or ''
+        if m.embeds and not text.strip():
+            text = '\n'.join(e.description or '' for e in m.embeds)
+        if '원가' in text and ('변동후' in text or '현재가' in text):
+            all_items.extend(parse_items(text, only_category='작물', only_season=season))
     if all_items:
         all_items.sort(key=lambda x: x['after'], reverse=True)
-        resp = f"📊 {only_season} 계절 작물 판매가 TOP {limit}\n"
-        for i, it in enumerate(all_items[:limit], start=1):
-            resp += f"{i}. {it['name']} - 판매가: {it['after']}\n"
-        await interaction.followup.send(resp)
+        msg = f"📊 {season} 계절 작물 판매가 TOP 5\n"
+        for i, it in enumerate(all_items[:5], 1):
+            msg += f"{i}. {it['name']} - {it['after']}\n"
+        await interaction.followup.send(msg)
     else:
-        await interaction.followup.send(f"최근 메시지에서 '{only_season}' 계절의 작물 시세 정보를 찾을 수 없어요.")
+        await interaction.followup.send(f"'{season}' 계절 시세 정보를 찾을 수 없습니다.")
 
+# 봇 실행
 if discord_bot_token:
     bot.run(discord_bot_token)
+
