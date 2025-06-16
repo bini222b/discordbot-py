@@ -57,15 +57,21 @@ def calculate_profit_rate(cost, price):
 
 # --- Discord 메시지 내용을 파싱하는 함수 수정 ---
 def parse_discord_message_data(message_content):
-    parsed = []
+    parsed_data = []
     lines = message_content.splitlines()
+
+    # 예전보다 훨씬 단순한 정규식(변동후 또는 마지막 숫자)
     regex = re.compile(
         r"^\s*(?P<name>.+?)\s*\((?P<stage>\d+)단계\)\s*:\s*"
         r"원가\s*:\s*(?P<cost>[\d,]+)"
         r"(?:\s*,\s*(?:변동후|현재가)\s*:\s*(?P<price>[\d,]+))?"
     )
-    for line in lines:
-        line = line.strip()
+
+    for raw in lines:
+        # 1) 마크다운 불필요 문구 정리: 앞쪽의 '- ' 제거, backtick 제거
+        line = raw.strip()
+        line = re.sub(r"^[-*]\s*", "", line)   # 맨 앞의 '- ' 또는 '* ' 제거
+        line = line.replace("`", "")           # backtick 전부 제거
         if not line:
             continue
 
@@ -75,11 +81,11 @@ def parse_discord_message_data(message_content):
             continue
 
         name   = m.group("name").strip()
-        stage  = f'{m.group("stage")}단계'
+        stage  = f"{m.group('stage')}단계"
         cost_s = m.group("cost")
         price_s= m.group("price")
 
-        # fallback: price가 없으면 숫자 마지막 사용
+        # 변동후 그룹에 없으면 숫자 목록의 마지막을 fallback
         if not price_s:
             nums = re.findall(r"[\d,]+", line)
             price_s = nums[-1] if len(nums) >= 2 else None
@@ -93,20 +99,20 @@ def parse_discord_message_data(message_content):
 
         is_premium = name.startswith("특상품")
         is_gold    = name.startswith("황금")
+        base_name  = name.replace("특상품 ", "").replace("황금 ", "").strip()
 
-        base_name = name.replace("특상품 ", "").replace("황금 ", "").strip()
-        parsed.append({
-            "name":      name,
-            "baseName":  base_name,
-            "stage":     stage,
-            "cost":      cost,
-            "price":     price,
+        parsed_data.append({
+            "name":       name,
+            "baseName":   base_name,
+            "stage":      stage,
+            "cost":       cost,
+            "price":      price,
             "profitRate": profit,
             "isPremium":  is_premium,
             "isGold":     is_gold
         })
 
-    return parsed
+    return parsed_data
 
 
 # Discord 메시지 길이 제한(2000자)을 고려하여 메시지를 분할하는 헬퍼 함수
