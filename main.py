@@ -78,35 +78,41 @@ def parse_discord_message_data(content: str):
 # --- 커맨드 처리 ---
 @bot.command(name="작물시세")
 async def crop(ctx, season: str):
-    # 알림 채널에서 최근 알림 메시지 검색
     channel = bot.get_channel(SOURCE_CHANNEL_ID)
     alert = None
+    # 최근 알림 메시지 찾기 (embed.title 또는 content)
     async for msg in channel.history(limit=50):
-        # embed 메시지 지원
-        if msg.author.bot:
-            if msg.embeds:
-                desc = msg.embeds[0].description or ''
-                if '🏪 무역상점1 가격 변동 알림' in desc:
-                    alert = desc
-                    break
-            elif '🏪 무역상점1 가격 변동 알림' in msg.content:
-                alert = msg.content
+        if not msg.author.bot:
+            continue
+        # Embed 형태인 경우
+        for emb in msg.embeds:
+            if emb.title and '무역상점1 가격 변동 알림' in emb.title:
+                parts = []
+                if emb.description:
+                    parts.append(emb.description)
+                for field in emb.fields:
+                    parts.append(field.value)
+                alert = '\n'.join(parts)
                 break
+        if alert:
+            break
+        # 일반 메시지
+        if '🏪 무역상점1 가격 변동 알림' in msg.content:
+            alert = msg.content
+            break
     if not alert:
         return await ctx.send("❗ 최근 알림 메시지를 찾을 수 없습니다.")
 
-    # 상승 섹션 추출
+    # 상승 섹션만 추출
     try:
         data_text = alert.split('📈 가격 상승된 아이템:')[1]
     except IndexError:
         return await ctx.send("❗ 알림 형식이 올바르지 않습니다.")
 
     all_data = parse_discord_message_data(data_text)
-    # 필터: 특상품/황금 제외 & 계절 매칭
     filtered = [c for c in all_data if not c['prem'] and not c['gold'] and season in fixed_crop_details.get(c['base'], {}).get('season', '')]
     if not filtered:
         return await ctx.send(f"❗ '{season}' 계절 작물이 없습니다.")
-    # 판매가 기준 내림차순 TOP10
     top10 = sorted(filtered, key=lambda x: x['price'], reverse=True)[:10]
 
     lines = [f"**🏪 무역상점1 {season} 계절 TOP10 (판매가 순)**", "---"]
