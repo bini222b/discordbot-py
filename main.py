@@ -5,7 +5,7 @@ from discord.ext import commands
 
 # --- 환경 변수 설정 ---
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-SOURCE_CHANNEL_ID = int(os.getenv("SOURCE_CHANNEL_ID") or 0)  # 알림 메시지가 올라오는 채널 ID
+SOURCE_CHANNEL_ID = int(os.getenv("SOURCE_CHANNEL_ID") or 0)  # 시세 알림 메시지가 올라오는 채널 ID
 
 if not DISCORD_BOT_TOKEN:
     raise ValueError("DISCORD_BOT_TOKEN 환경 변수가 설정되지 않았습니다.")
@@ -13,9 +13,10 @@ if not SOURCE_CHANNEL_ID:
     raise ValueError("SOURCE_CHANNEL_ID 환경 변수가 설정되지 않았습니다.")
 
 # --- 봇 설정 ---
+# 텍스트 커맨드 접두사로 '!' 사용 (슬래시 대신)
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="", intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # --- 작물 기본 정보 ---
 fixed_crop_details = {
@@ -57,74 +58,63 @@ def calculate_profit_rate(cost, price):
     return (price - cost) / cost * 100
 
 # --- 메시지 파싱 ---
-def parse_discord_message_data(message_content: str):
+def parse_discord_message_data(content: str):
     parsed = []
-    regex = re.compile(
-        r"^\s*(?P<name>.+?)\s*\((?P<stage>\d+)단계\).*?원가\s*:\s*(?P<cost>[\d,]+).*?(?:변동후|현재가)\s*:\s*(?P<price>[\d,]+)"
-    )
-    for line in message_content.splitlines():
-        text = line.strip().replace('`','').lstrip('- ').strip()
+    regex = re.compile(r"^\s*(?P<name>.+?)\s*\((?P<stage>\d+)단계\).*?원가\s*:\s*(?P<cost>[\d,]+).*?(?:변동후|현재가)\s*:\s*(?P<price>[\d,]+)")
+    for line in content.splitlines():
+        text = line.strip().lstrip('- ').replace('`','').strip()
         m = regex.match(text)
         if not m:
             continue
-        name = m['name'].strip()
-        stage = f"{m['stage']}단계"
-        cost = int(m['cost'].replace(',',''))
+        name  = m['name']
+        base  = name.replace("특상품 ","").replace("황금 ","")
+        cost  = int(m['cost'].replace(',',''))
         price = int(m['price'].replace(',',''))
-        profit = calculate_profit_rate(cost, price)
-        is_prem = name.startswith("특상품")
-        is_gold = name.startswith("황금")
-        base = name.replace("특상품 ","").replace("황금 ","")
-        parsed.append({"name":name,"base":base,"stage":stage,"cost":cost,"price":price,"profit":profit,"prem":is_prem,"gold":is_gold})
+        profit= calculate_profit_rate(cost, price)
+        parsed.append({
+            'name':name,
+            'base':base,
+            'stage':f"{m['stage']}단계",
+            'cost':cost,
+            'price':price,
+            'profit':profit,
+            'prem':name.startswith("특상품"),
+            'gold':name.startswith("황금")
+        })
     return parsed
 
-# --- 봇 이벤트 핸들러 ---
-@bot.event
-async def on_ready():
-    print(f"로그인 완료 {bot.user}.")
+# --- 커맨드 처리 ---
+@bot.command(name="작물시세")
+async def crop(ctx, season: str):
+    # 알림 채널에서 최근 알림 찾기
+    channel = bot.get_channel(SOURCE_CHANNEL_ID)
+    alert = None
+    async for msg in channel.history(limit=50):
+        if msg.author.bot and '🏪 무역상점1 가격 변동 알림' in msg.content:
+            alert = msg.content
+            break
+    if not alert:
+        return await ctx.send("❗ 최근 알림 메시지를 찾을 수 없습니다.")
 
-@bot.event
-async def on_message(message):
-    # 봇 메시지 무시
-    if message.author.bot:
-        return
+    # '📈 가격 상승된 아이템:' 이후 텍스트만 파싱
+    try:
+        data_text = alert.split('📈 가격 상승된 아이템:')[1]
+    except IndexError:
+        return await ctx.send("❗ 알림 형식이 올바르지 않습니다.")
 
-    # 슬래시 대신 텍스트 커맨드
-    if message.content.startswith("/작물시세"):
-        parts = message.content.split(maxsplit=1)
-        if len(parts) < 2:
-            return await message.channel.send("❗ 사용법: /작물시세 <계절>")
-        season = parts[1].strip()
+    all_data = parse_discord_message_data(data_text)
+    # 필터 & 계절 & 제외
+    filtered = [c for c in all_data if not c['prem'] and not c['gold'] and season in fixed_crop_details.get(c['base'],{}).get('season','')]
+    if not filtered:
+        return await ctx.send(f"❗ '{season}' 계절 작물이 없습니다.")
+    # 판매가 순 정렬 및 TOP10
+    top10 = sorted(filtered, key=lambda x: x['price'], reverse=True)[:10]
 
-        # 지정 채널에서 최근 알림 찾기
-        channel = bot.get_channel(SOURCE_CHANNEL_ID)
-        alert_msg = None
-        async for msg in channel.history(limit=50):
-            if msg.author.bot and '🏪 무역상점1 가격 변동 알림' in msg.content:
-                alert_msg = msg.content
-                break
-        if not alert_msg:
-            return await message.channel.send("❗ 최근 알림 메시지를 찾을 수 없습니다.")
-
-        # 파싱 대상 절취
-        parts = alert_msg.split('📈 가격 상승된 아이템:')
-        if len(parts) < 2:
-            return await message.channel.send("❗ 알림 형식이 올바르지 않습니다.")
-        data_text = parts[1]
-
-        all_data = parse_discord_message_data(data_text)
-        # 필터링
-        filtered = [c for c in all_data if not c['prem'] and not c['gold'] and season in fixed_crop_details.get(c['base'],{}).get('season','')]
-        if not filtered:
-            return await message.channel.send(f"❗ '{season}' 계절 작물이 없습니다.")
-        # 정렬
-        top10 = sorted(filtered, key=lambda x: x['price'], reverse=True)[:10]
-
-        lines = [f"**🏪 무역상점1 {season} 계절 TOP10 (판매가 순)**", "---"]
-        for i, c in enumerate(top10,1):
-            info = fixed_crop_details.get(c['base'],{'mastery':'-','season':'-'})
-            lines.append(f"{i}. **{c['name']}** (단계:{c['stage']}, 원가:{c['cost']:,}원, 판매가:{c['price']:,}원) 수익률:{c['profit']:.2f}% (숙련도:{info['mastery']}, 계절:{info['season']})")
-        await message.channel.send("\n".join(lines))
+    lines = [f"**🏪 무역상점1 {season} 계절 TOP10 (판매가 순)**", "---"]
+    for i, c in enumerate(top10,1):
+        info= fixed_crop_details.get(c['base'],{'mastery':'-','season':'-'})
+        lines.append(f"{i}. **{c['name']}** (단계:{c['stage']}, 원가:{c['cost']:,}원, 판매가:{c['price']:,}원) 수익률:{c['profit']:.2f}% (숙련도:{info['mastery']}, 계절:{info['season']})")
+    await ctx.send("\n".join(lines))
 
 # --- 봇 실행 ---
 bot.run(DISCORD_BOT_TOKEN)
